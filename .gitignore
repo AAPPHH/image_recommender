@@ -1,0 +1,6 @@
+*.db
+*.npy
+*.faiss
+*.pkl
+*.log
+images_v3/
