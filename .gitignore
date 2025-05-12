@@ -1,6 +1,10 @@
 *.db
+*.db-wal
+*.db-shm
 *.npy
 *.faiss
 *.pkl
 *.log
 images_v3/
+models/
+__pycache__/

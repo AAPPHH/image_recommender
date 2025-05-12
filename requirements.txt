@@ -1,0 +1,7 @@
+dreamsim==0.2.1
+faiss_cpu==1.10.0
+lpips==0.1.4
+opencv_python==4.11.0.86
+torch==2.6.0+cu126
+torchvision==0.21.0+cu126
+tqdm==4.67.1

@@ -1,124 +1,138 @@
-# 🖼️ Image Recommender with OpenCLIP + FAISS
+# 🖼️ Image Recommender with Color, LPIPS, DreamSim & FAISS
 
-Ein hochperformantes System zur Bildähnlichkeitssuche basierend auf OpenCLIP-Embeddings, SQLite-Datenbank und FAISS-Indexierung. Ideal für Projekte, bei denen eine schnelle und GPU-beschleunigte Suche nach visueller Ähnlichkeit gefragt ist.
-
-## 🚀 Features
-
-- 🔍 **CLIP-basiertes Embedding** mit `ViT-L-14` (OpenAI pretrained)
-- 🗂️ **Datenbank** (`SQLite`) zur Speicherung von Pfaden und Vektoren
-- ⚡ **Vektorisierung** mit CUDA-Unterstützung
-- 📦 **HNSW-Indexierung** mit FAISS
-- 🎯 **Bildbasierte Ähnlichkeitssuche** mit visueller Vorschau (via Matplotlib)
-- 🖼️ Unterstützung für `.jpg`, `.jpeg`, `.png`
+A high-performance image similarity search pipeline leveraging multiple embedding strategies and efficient indexing. Store image paths and embeddings in SQLite, then build a FAISS HNSW index for fast nearest-neighbor retrieval.
 
 ---
 
-## 🔧 Projektstruktur
+## 🚀 Key Features
+
+- **Diverse Embedding Methods**: Color histograms, LPIPS perceptual features, DreamSim embeddings (using a CLIP backbone)
+- **SQLite Database**: Central storage of image filepaths and embedding blobs in a single `images` table
+- **Batch Processing**: Scale effortlessly over large image collections with configurable batch sizes
+- **GPU Acceleration**: Option to leverage CUDA for LPIPS and DreamSim feature extraction
+- **FAISS HNSW Index**: Build and query an HNSW index for sub-second similarity searches
+- **Flexible Search**: Combine any subset of supported embeddings (e.g., `color`, `lpips`, `dreamsim`)
+- **Built-in Visualization**: Quickly display top-K similar images using Matplotlib
+
+---
+
+## 📂 Project Structure
 
 ```bash
 .
-├── create_db.py            # Erstellt und füllt die SQLite-Datenbank mit Bildpfaden
-├── create_features.py      # Erstellt Vektoren aus Bildern via OpenCLIP
-├── create_index.py         # Baut einen FAISS HNSW Index auf den Embeddings
-└── search_from_image.py    # Führt eine bildbasierte Ähnlichkeitssuche durch
-```
+├── create_db.py              # Scan image folders and insert relative filepaths into SQLite
+├── create_color_vector.py    # Compute and store color histogram embeddings
+├── create_lpips_vector.py    # Compute and store LPIPS perceptual embeddings
+├── create_dreamsim_vector.py # Compute and store DreamSim embeddings (with CLIP backbone)
+├── ceate_main_features.py    # Orchestrate color, LPIPS & DreamSim extraction in a single pipeline
+├── create_index.py           # Build a FAISS HNSW index over completed embeddings
+├── search_from_image.py      # Perform similarity search and display results
+└── README.md                 # Project documentation
+``` 
 
 ---
 
-## 🛠️ Setup
+## 🛠️ Installation & Dependencies
 
-### Voraussetzungen
-
-- Python 3.8+
-- CUDA-fähige GPU (optional, aber empfohlen)
-- Empfohlene Pakete:
+1. **Python Version**: 3.8 or higher
+2. **Recommended**: CUDA-enabled GPU for accelerated feature extraction
+3. **Core Libraries**:
 
 ```bash
-pip install torch torchvision open_clip_torch faiss-cpu Pillow matplotlib seaborn
+pip install torch torchvision lpips dreamsim faiss-cpu Pillow matplotlib opencv-python
 ```
 
-> Für CUDA-Unterstützung `faiss-gpu` installieren und `torch` entsprechend deiner GPU-Version.
+> For GPU support with FAISS, install `faiss-gpu` instead of `faiss-cpu`.
 
 ---
 
-## 📸 Verwendung
+## 📘 Usage Guide
 
-### 1. Datenbank erstellen
+### 1. Initialize the Database
 
 ```bash
-python create_db.py
+python create_db.py --base-folder /path/to/images --db-path images.db
 ```
 
-Durchsucht das Bilderverzeichnis rekursiv und legt relative Pfade in einer SQLite-Datenbank ab.
+Recursively scans the specified folder and populates the `images` table with relative filepaths.
 
----
+### 2. Extract Feature Embeddings
 
-### 2. Feature-Extraktion (OpenCLIP)
+Run all extractors in one go:
 
 ```bash
-python create_features.py
+python ceate_main_features.py
 ```
 
-Lädt Bilder, erzeugt normalisierte Embeddings mit `ViT-L-14` und speichert sie als BLOBs in die Datenbank.
-
----
-
-### 3. FAISS-Index aufbauen
+Or execute each step individually:
 
 ```bash
-python create_index.py
+python create_color_vector.py
+python create_lpips_vector.py
+python create_dreamsim_vector.py
 ```
 
-Lädt alle vorhandenen Vektoren aus der Datenbank und erstellt einen HNSW-Index (inkl. Speicherung von Offsets).
+Each script locates records where its corresponding embedding blob is `NULL` and appends the new data.
 
----
-
-### 4. Bildähnlichkeitssuche
+### 3. Build the FAISS Index
 
 ```bash
-python search_from_image.py
+python create_index.py --vector-types color lpips dreamsim --output index_hnsw.faiss
 ```
 
-Gibt zu einem eingegebenen Bild die `Top-K` ähnlichsten Bilder visuell aus.
+- **`--vector-types`**: Choose any combination of `color`, `lpips`, `dreamsim`.
+- **`--batch-size`**, **`--hnsw_M`**, **`--efConstruction`**, **`--efSearch`**: Tune indexing speed vs. recall.
+
+### 4. Search for Similar Images
+
+```bash
+python search_from_image.py --query /path/to/query.jpg --index combo_color_lpips_dreamsim --top-k 5
+```
+
+Renders the top-K matches with distance metrics.
 
 ---
 
-## ⚙️ Konfigurierbare Parameter
+## ⚙️ Configuration Parameters
 
-In den jeweiligen Skripten anpassbar:
-
-- `BASE_DIR`: Basisverzeichnis der Bilder
-- `db_path`: Pfad zur SQLite-Datenbank
-- `batch_size`, `model_batch_size`: Einfluss auf Speed vs. Speicherbedarf
-- `hnsw_M`, `efConstruction`, `efSearch`: Feinjustierung des FAISS-Index
-- `TOP_K`: Anzahl ähnlicher Bilder bei der Suche
-
----
-
-## 📂 Datenbankstruktur
-
-Tabelle `images`:
-
-| id | filepath (relativ) | vector_blob | faiss_index_offset |
-|----|--------------------|-------------|---------------------|
-| 1  | `img/foo.jpg`      | BLOB        | 42                  |
+| Parameter          | Description                                        |
+|--------------------|----------------------------------------------------|
+| `BASE_DIR`         | Root folder containing images                      |
+| `DB_PATH`          | SQLite database file path                          |
+| `batch_size`       | Records processed per batch                        |
+| `model_batch_size` | Number of images sent to the model at once         |
+| `bins`             | Number of bins per channel for color histograms    |
+| `hnsw_M`           | FAISS HNSW "M" parameter                           |
+| `efConstruction`   | FAISS index construction effort vs. accuracy trade |
+| `efSearch`         | FAISS search speed vs. recall trade-off            |
+| `TOP_K`            | Number of neighbors retrieved in search            |
 
 ---
 
-## 🧠 Modell-Infos
+## 🗄️ Database Schema
 
-- **Modell**: `ViT-L-14` (CLIP, pretrained by OpenAI)
-- **Lib**: `open_clip_torch`
-- **Vektordimension**: 768 (standard für dieses Modell)
+**Table `images`**
+
+| Column                  | Type    | Description                         |
+|-------------------------|---------|-------------------------------------|
+| `id`                    | INTEGER | Primary key                         |
+| `filepath`              | TEXT    | Relative path under `BASE_DIR`      |
+| `color_vector_blob`     | BLOB    | Serialized color histogram vector   |
+| `lpips_vector_blob`     | BLOB    | Serialized LPIPS feature vector     |
+| `dreamsim_vector_blob`  | BLOB    | Serialized DreamSim embedding       |
+
+**Offset Tables**
+
+Each FAISS combination creates a table `faiss_index_offsets_<combo>` mapping `image_id` → index offset.
 
 ---
 
-## 📝 Lizenz
+## 📄 License
 
-MIT License – feel free to use, modify and share.
+MIT License — freely use, modify, and distribute.
 
 ---
 
-## 💡 Inspiration
+## 💡 Applications
 
-Diese Pipeline ist ideal, um große Bildmengen lokal effizient durchsuchbar zu machen – sei es in Forschung, Medienarchiven oder kreativen Projekten. ✨
+Ideal for creative archives, research projects, and media libraries where rapid visual similarity search enhances curation workflows and recommendation engines.
