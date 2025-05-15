@@ -61,6 +61,11 @@ class ImageDBCreator:
                 );
                 """
             )
+            c.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_path ON images (path);
+                """
+            )	
         print(f"Table 'images' in {self.db_path} is ready.")
 
     def _batch_generator(self):
