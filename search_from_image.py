@@ -257,4 +257,4 @@ if __name__ == "__main__":
         r"\image_data\pixabay_dataset_v1\images_01"
         r"\a-heart-love-sadness-emotions-2719081.jpg"
     )
-    search_similar_images(query_image, index_type="color")
+    search_similar_images(query_image, index_type="dreamsim")

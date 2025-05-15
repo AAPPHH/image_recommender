@@ -3,15 +3,11 @@ import sqlite3
 import pickle
 import numpy as np
 import faiss
+import logging
 from pathlib import Path
-
-from logging_utils import setup_logging, console_and_log
 
 # FAISS multithreading workaround
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
-# Initialize logging
-setup_logging("faiss_builder.log", log_dir="logs")
 
 
 class FAISSIndexBuilderDB:
@@ -24,7 +20,14 @@ class FAISSIndexBuilderDB:
         hnsw_M: int = 32,
         efConstruction: int = 200,
         efSearch: int = 64,
-    ):
+        log_file: str = "faiss_builder.log",
+        log_dir: str = "logs",
+    ):  
+        # Logging setup
+        self.log_dir = log_dir
+        self.log_file = log_file
+        self._setup_logging()
+
         self.db_path = db_path
         self.vector_types = vector_types or ["clip", "color", "lpips"]
         self.vector_cols = [f"{t}_vector_blob" for t in self.vector_types]
@@ -49,6 +52,36 @@ class FAISSIndexBuilderDB:
 
         self._prepare_offset_table()
 
+    def _setup_logging(self):
+        """
+        Initializes logging to file in specified directory.
+        """
+        Path(self.log_dir).mkdir(parents=True, exist_ok=True)
+        full_path = Path(self.log_dir) / self.log_file
+        logging.basicConfig(
+            level=logging.INFO,
+            filename=str(full_path),
+            filemode="a",
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            encoding="utf-8",
+        )
+        self._log(f"Logging initialized (file={full_path})", level="info")
+
+    def _log(self, message: str, level: str = "info"):
+        """
+        Prints and logs a message at the specified level.
+        """
+        print(message)
+        lvl = level.lower()
+        if lvl == "info":
+            logging.info(message)
+        elif lvl == "warning":
+            logging.warning(message)
+        elif lvl == "error":
+            logging.error(message)
+        else:
+            logging.debug(message)
+
     def _configure_db(self, conn):
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=OFF;")
@@ -63,7 +96,7 @@ class FAISSIndexBuilderDB:
             """
         )
         self.write_conn.commit()
-        console_and_log(f"Offset table '{self.offset_table}' is ready.", level="info")
+        self._log(f"Offset table '{self.offset_table}' is ready.", level="info")
 
     def _count_records(self):
         where_clause = " AND ".join(f"{col} IS NOT NULL" for col in self.vector_cols)
@@ -96,7 +129,7 @@ class FAISSIndexBuilderDB:
                     vec = np.asarray(vec, dtype="float32").ravel()
                     parts.append(vec)
                 except Exception as e:
-                    console_and_log(f"ID {rec_id}: error loading {vt}: {e}", level="warning")
+                    self._log(f"ID {rec_id}: error loading {vt}: {e}", level="warning")
                     skip = True
                     break
             if skip:
@@ -109,7 +142,7 @@ class FAISSIndexBuilderDB:
         index = faiss.IndexHNSWFlat(dim, self.hnsw_M)
         index.hnsw.efConstruction = self.efConstruction
         index.hnsw.efSearch = self.efSearch
-        console_and_log(f"Created HNSW index (dim={dim}, M={self.hnsw_M})", level="info")
+        self._log(f"Created HNSW index (dim={dim}, M={self.hnsw_M})", level="info")
         return index
 
     def _store_offsets(self, ids, start_offset):
@@ -122,20 +155,20 @@ class FAISSIndexBuilderDB:
 
     def build_index(self, update_index: bool = False):
         combo = "_".join(self.vector_types)
-        console_and_log(f"Starting FAISS index build for [{combo}]…", level="info")
+        self._log(f"Starting FAISS index build for [{combo}]…", level="info")
 
         if not update_index:
             if self.index_file.exists():
-                console_and_log(f"Removing existing index {self.index_file}", level="info")
+                self._log(f"Removing existing index {self.index_file}", level="info")
                 self.index_file.unlink()
-            console_and_log(f"Clearing offset table {self.offset_table}", level="info")
+            self._log(f"Clearing offset table {self.offset_table}", level="info")
             self.write_cur.execute(f"DELETE FROM {self.offset_table}")
             self.write_conn.commit()
 
         total = self._count_records()
-        console_and_log(f"{total} complete records found.", level="info")
+        self._log(f"{total} complete records found.", level="info")
         if total == 0:
-            console_and_log("No complete embeddings found; aborting.", level="error")
+            self._log("No complete embeddings found; aborting.", level="error")
             return
 
         index = None
@@ -155,24 +188,24 @@ class FAISSIndexBuilderDB:
             index.add(arr)
             self._store_offsets(ids, offset_counter)
             offset_counter += len(ids)
-            console_and_log(
+            self._log(
                 f"Batch {batch_num}: added {len(ids)} vectors (total {offset_counter}).",
                 level="info",
             )
 
-        console_and_log(f"Writing FAISS index to {self.index_file.resolve()}", level="info")
+        self._log(f"Writing FAISS index to {self.index_file.resolve()}", level="info")
         faiss.write_index(index, str(self.index_file))
-        console_and_log(f"Index saved ({index.ntotal} vectors).", level="info")
+        self._log(f"Index saved ({index.ntotal} vectors).", level="info")
 
         self.read_conn.close()
         self.write_conn.close()
-        console_and_log("Done.", level="info")
+        self._log("Done.", level="info")
 
 
 if __name__ == "__main__":
     builder = FAISSIndexBuilderDB(
         db_path="images.db",
-        vector_types=["color"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
+        vector_types=["color", "lpips", "dreamsim"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
         batch_size=1024,
         hnsw_M=32,
         efConstruction=200,
