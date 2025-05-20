@@ -22,31 +22,31 @@ def main():
     )
     color_indexer.run()
 
-    # 2) LPIPS Vektoren berechnen
-    print("=== Starte LPIPS Vector Indexing ===")
-    lpips_indexer = LPIPSVectorIndexer(
-        db_path=db_path,
-        base_dir=base_dir,
-        batch_size=8192,
-        model_batch=128,
-        log_file="lpips_indexer.log",
-        log_dir="logs",
-    )
-    lpips_indexer.run()
+    # # 2) LPIPS Vektoren berechnen
+    # print("=== Starte LPIPS Vector Indexing ===")
+    # lpips_indexer = LPIPSVectorIndexer(
+    #     db_path=db_path,
+    #     base_dir=base_dir,
+    #     batch_size=8192,
+    #     model_batch=128,
+    #     log_file="lpips_indexer.log",
+    #     log_dir="logs",
+    # )
+    # lpips_indexer.run()
 
-    # 3) DreamSim Vektoren berechnen
-    print("=== Starte DreamSim Vector Indexing ===")
-    dreamsim_indexer = DreamSimVectorIndexer(
-        db_path=db_path,
-        base_dir=base_dir,
-        batch_size=4096,
-        model_batch=128,
-        log_file="dreamsim_indexer.log",
-        log_dir="logs",
-    )
-    dreamsim_indexer.run()
+    # # 3) DreamSim Vektoren berechnen
+    # print("=== Starte DreamSim Vector Indexing ===")
+    # dreamsim_indexer = DreamSimVectorIndexer(
+    #     db_path=db_path,
+    #     base_dir=base_dir,
+    #     batch_size=4096,
+    #     model_batch=128,
+    #     log_file="dreamsim_indexer.log",
+    #     log_dir="logs",
+    # )
+    # dreamsim_indexer.run()
 
-    print("=== Alle Vektor-Indexierungen abgeschlossen ===")
+    # print("=== Alle Vektor-Indexierungen abgeschlossen ===")
 
 
 if __name__ == "__main__":

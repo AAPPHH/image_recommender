@@ -14,6 +14,8 @@ import lpips
 import torchvision.transforms as T
 from torchvision.transforms.functional import to_tensor
 from dreamsim import dreamsim
+from scipy.spatial.distance import cdist
+import joblib
 
 # ----------------------------------------
 # Configuration
@@ -55,10 +57,44 @@ def _load_dreamsim():
             pretrained=True,
             device=device,
             normalize_embeds=True,
-            dreamsim_type="open_clip_vitb32"
+            dreamsim_type="ensemble",
         )
         _ds_model.eval()
     return _ds_model, _ds_preprocess
+
+# -------------------------------
+# Lazy-Loading: SIFT-VLAD-Komponenten
+# -------------------------------
+_sift_codebook = None
+_sift_pca = None
+SIFT_CODEBOOK_PATH = "sift_codebook.npy"
+SIFT_PCA_PATH = "sift_vlad_pca.joblib"
+SIFT_N_CLUSTERS = 256        # muss zu deinem Codebook passen
+SIFT_DESC_DIM  = 128         # SIFT-Descriptor-Länge
+
+def _load_sift_components():
+    """
+    Lädt Codebook (kMeans-Clusterzentren) und PCA einmalig in den RAM.
+    """
+    global _sift_codebook, _sift_pca
+    if _sift_codebook is None:
+        if not os.path.exists(SIFT_CODEBOOK_PATH):
+            raise FileNotFoundError(
+                f"Codebook fehlt: {SIFT_CODEBOOK_PATH}. "
+                "Bitte zuerst mit dem Indexer erzeugen."
+            )
+        _sift_codebook = np.load(SIFT_CODEBOOK_PATH).astype("float32")
+
+    if _sift_pca is None:
+        if not os.path.exists(SIFT_PCA_PATH):
+            raise FileNotFoundError(
+                f"PCA fehlt: {SIFT_PCA_PATH}. "
+                "Bitte zuerst mit dem Indexer erzeugen."
+            )
+        _sift_pca = joblib.load(SIFT_PCA_PATH)
+
+    return _sift_codebook, _sift_pca
+
 
 # ----------------------------------------
 # DB-Funktionen: Vektoren lesen/schreiben
@@ -93,18 +129,6 @@ def _get_db_vector(path_rel: str, column: str) -> np.ndarray:
         return arr
     return None
 
-
-def _set_db_vector(path_rel: str, column: str, vec: np.ndarray):
-    # Speichere immer als Pickle für Kompatibilität
-    blob = pickle.dumps(vec, protocol=pickle.HIGHEST_PROTOCOL)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO images (path) VALUES (?)", (path_rel,))
-    cur.execute(f"UPDATE images SET {column} = ? WHERE path = ?", (blob, path_rel))
-    conn.commit()
-    conn.close()
-    logging.info(f"Saved '{column}' to DB for '{path_rel}' (shape: {vec.shape}).")
-
 # ----------------------------------------
 # Feature-Extraktion mit DB-Cache
 # ----------------------------------------
@@ -121,8 +145,67 @@ def extract_color_features(image: Image.Image, path_rel: str, bins: int = 16) ->
         cv2.normalize(hist, hist)
         feats.append(hist.flatten())
     vec = np.concatenate(feats).astype("float32").reshape(1, -1)
-    _set_db_vector(path_rel, col, vec)
     return vec
+
+def extract_sift_vlad_features(image: Image.Image, path_rel: str) -> np.ndarray:
+    """
+    Liefert den SIFT-VLAD-Vektor (256-D PCA) aus der DB.
+    Fällt optional auf On-the-fly-Berechnung zurück,
+    falls der Eintrag noch nicht im Cache steht.
+    """
+    col = "sift_vlad_blob"
+    cached = _get_db_vector(path_rel, col)
+    if cached is not None:
+        return cached
+
+    logging.warning(f"SIFT-VLAD nicht im Cache – berechne on the fly für '{path_rel}'.")
+    codebook, pca = _load_sift_components()
+
+    # 1) SIFT-Deskriptoren
+    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+    gray = cv2.resize(gray, (256, 256))
+    sift = cv2.SIFT_create()
+    _, desc = sift.detectAndCompute(gray, None)
+    if desc is None or len(desc) == 0:
+        logging.error(f"Keine SIFT-Features in '{path_rel}'.")
+        return None
+
+    # 2) VLAD-Aggregierung
+    idxs = np.argmin(cdist(desc, codebook), axis=1)
+    vlad = np.zeros((SIFT_N_CLUSTERS, SIFT_DESC_DIM), dtype="float32")
+    for i, d in zip(idxs, desc):
+        vlad[i] += d - codebook[i]
+
+    # Power- und L2-Norm
+    vlad = np.sign(vlad) * np.sqrt(np.abs(vlad))
+    vlad = vlad.flatten()
+    norm = np.linalg.norm(vlad)
+    if norm > 0:
+        vlad /= norm
+
+    # 3) PCA-Kompression
+    vec = pca.transform(vlad.reshape(1, -1)).astype("float32")
+    return vec
+
+
+def extract_hog_features(image: Image.Image, path_rel: str, img_size=(64, 128)) -> np.ndarray:
+    col = "hog_vector_blob"
+    exists = _get_db_vector(path_rel, col)
+    if exists is not None:
+        return exists
+    logging.info(f"Computing HOG features for '{path_rel}'.")
+    img = image.convert("L").resize(img_size)
+    img_np = np.array(img)
+    hog = cv2.HOGDescriptor()
+    vec = hog.compute(img_np)
+    if vec is None:
+        logging.warning(f"HOG-Feature konnte für '{path_rel}' nicht berechnet werden.")
+        return None
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec = vec / norm
+    arr = vec.flatten().astype("float16").reshape(1, -1)
+    return arr
 
 
 def extract_lpips_features(image: Image.Image, path_rel: str) -> np.ndarray:
@@ -144,7 +227,6 @@ def extract_lpips_features(image: Image.Image, path_rel: str) -> np.ndarray:
         torch.nn.functional.adaptive_avg_pool2d(fmap, 1).flatten(1), dim=1
     )
     arr = vec.cpu().numpy().astype("float32")
-    _set_db_vector(path_rel, col, arr)
     return arr
 
 
@@ -162,13 +244,12 @@ def extract_dreamsim_features(image: Image.Image, path_rel: str) -> np.ndarray:
     with torch.no_grad():
         vec = model.embed(x)
     arr = vec.cpu().numpy().astype("float32")
-    _set_db_vector(path_rel, col, arr)
     return arr
 
 # ----------------------------------------
 # Suche ähnliche Bilder mit FAISS
 # ----------------------------------------
-def search_similar_images(query_image_path: str, index_type: str = "clip"):
+def search_similar_images(query_image_path: str, index_type: str = "color"):
     try:
         image = Image.open(query_image_path).convert("RGB")
     except Exception as e:
@@ -177,7 +258,8 @@ def search_similar_images(query_image_path: str, index_type: str = "clip"):
 
     path_rel = os.path.relpath(query_image_path, BASE_DIR)
     requested = set(index_type.lower().split("_"))
-    valid = ["clip", "color", "lpips", "dreamsim"]
+    valid = ["color", "hog", "lpips", "dreamsim", "sift_vlad"]   # <-- erweitert
+
     ordered = [v for v in valid if v in requested]
     if not ordered:
         logging.error(f"Unbekannter index_type '{index_type}'. Wähle aus {valid}.")
@@ -190,8 +272,15 @@ def search_similar_images(query_image_path: str, index_type: str = "clip"):
             parts.append(extract_color_features(image, path_rel))
         elif vec_type == "lpips":
             parts.append(extract_lpips_features(image, path_rel))
-        elif vec_type in ("dreamsim", "clip"):
+        elif vec_type in ("dreamsim"):
             parts.append(extract_dreamsim_features(image, path_rel))
+        elif vec_type == "hog":
+            parts.append(extract_hog_features(image, path_rel))
+        elif vec_type == "sift_vlad":
+            parts.append(extract_sift_vlad_features(image, path_rel))
+        else:
+            logging.error(f"Unbekannter Vektor-Typ '{vec_type}' für '{path_rel}'.")
+            return
 
     query_vec = np.concatenate(parts, axis=1).astype("float32")
     canonical = "_".join(ordered)
@@ -235,11 +324,20 @@ def search_similar_images(query_image_path: str, index_type: str = "clip"):
     results.sort(key=lambda x: x[1])
 
     sns.set_theme(style="whitegrid")
-    n = len(results)
-    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
-    if n == 1:
-        axes = [axes]
-    for ax, (fp, dist) in zip(axes, results):
+    max_per_row = 3
+    total_images = len(results) + 1
+    ncols = max_per_row
+    nrows = int(np.ceil(total_images / ncols))
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
+    axes = axes.flatten()
+
+    axes[0].imshow(image)
+    axes[0].set_title("Query Image")
+    axes[0].axis("off")
+
+    for idx, (fp, dist) in enumerate(results):
+        ax = axes[idx + 1]
         try:
             img = Image.open(fp)
             ax.imshow(img)
@@ -247,14 +345,15 @@ def search_similar_images(query_image_path: str, index_type: str = "clip"):
             ax.axis("off")
         except Exception as e:
             logging.error(f"Fehler beim Rendern von {fp}: {e}")
+
+    for ax in axes[len(results) + 1:]:
+        ax.axis("off")
+
     plt.tight_layout()
     plt.show()
 
 if __name__ == "__main__":
     query_image = (
-        r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones"
-        r"\image_recomender\image_recommender\images_v3"
-        r"\image_data\pixabay_dataset_v1\images_01"
-        r"\a-heart-love-sadness-emotions-2719081.jpg"
+        r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\Landscapes\00000000_(6).jpg"
     )
-    search_similar_images(query_image, index_type="dreamsim")
+    search_similar_images(query_image, index_type="color_hog")

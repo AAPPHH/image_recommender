@@ -126,7 +126,7 @@ class FAISSIndexBuilderDB:
                     vec = pickle.loads(blob)
                     if hasattr(vec, "cpu"):
                         vec = vec.cpu().numpy()
-                    vec = np.asarray(vec, dtype="float32").ravel()
+                    vec = np.asarray(vec, dtype="float16").ravel()
                     parts.append(vec)
                 except Exception as e:
                     self._log(f"ID {rec_id}: error loading {vt}: {e}", level="warning")
@@ -205,7 +205,7 @@ class FAISSIndexBuilderDB:
 if __name__ == "__main__":
     builder = FAISSIndexBuilderDB(
         db_path="images.db",
-        vector_types=["color", "lpips", "dreamsim"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
+        vector_types=["color", "hog"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
         batch_size=1024,
         hnsw_M=32,
         efConstruction=200,

@@ -76,9 +76,12 @@ class BaseVectorIndexer:
     def _init_db(self):
         self.read_conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         self.read_conn.execute("PRAGMA journal_mode=WAL;")
-        self.write_conn = sqlite3.connect(self.db_path, timeout=30)
+        self.write_conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         self.write_conn.execute("PRAGMA journal_mode=WAL;")
+        self.write_conn.execute("PRAGMA synchronous=OFF;")
+        self.write_conn.execute("PRAGMA temp_store=MEMORY;")
         self._log_and_print(f"Connected to DB: {self.db_path}", level="info")
+
 
     def get_pending_rows(self, last_id: int):
         """
@@ -106,9 +109,16 @@ class BaseVectorIndexer:
 
         cursor = self.write_conn.cursor()
         sql = f"UPDATE images SET {self.vector_column} = ? WHERE id = ?"
-        cursor.executemany(sql, blobs)
-        self.write_conn.commit()
-        self._log_and_print(f"✅ Wrote {len(blobs)} vectors to DB.", level="info")
+
+        try:
+            self._log_and_print(f"Writing {len(blobs)} vectors to DB...", level="info")
+            cursor.execute("BEGIN TRANSACTION;")
+            cursor.executemany(sql, blobs)
+            self.write_conn.commit()
+            self._log_and_print(f"✅ Wrote {len(blobs)} vectors to DB.", level="info")
+        except Exception as e:
+            self.write_conn.rollback()
+            self._log_and_print(f"❌ Write failed, rolled back: {e}", level="error")
 
     def run(self):
         total = self.read_conn.cursor().execute(
