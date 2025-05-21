@@ -1,7 +1,17 @@
 dreamsim==0.2.1
 faiss_cpu==1.10.0
+joblib==1.4.2
 lpips==0.1.4
+matplotlib==3.10.3
+numpy==2.2.6
 opencv_python==4.11.0.86
+Pillow==11.2.1
+Requests==2.32.3
+scikit_learn==1.6.1
+scipy==1.15.3
+seaborn==0.13.2
+skimage==0.0
+submitit==1.5.3
 torch==2.6.0+cu126
 torchvision==0.21.0+cu126
 tqdm==4.67.1

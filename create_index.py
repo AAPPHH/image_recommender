@@ -29,7 +29,7 @@ class FAISSIndexBuilderDB:
         self._setup_logging()
 
         self.db_path = db_path
-        self.vector_types = vector_types or ["clip", "color", "lpips"]
+        self.vector_types = vector_types
         self.vector_cols = [f"{t}_vector_blob" for t in self.vector_types]
         self.batch_size = batch_size
 
@@ -98,17 +98,26 @@ class FAISSIndexBuilderDB:
         self.write_conn.commit()
         self._log(f"Offset table '{self.offset_table}' is ready.", level="info")
 
+    def _make_select_and_joins(self):
+        select_cols = ["i.id"]
+        join_strs = []
+        for vtype in self.vector_types:
+            alias = vtype[0]  # z. B. 'c', 's', 'd'
+            vtable = f"{vtype}_vectors"
+            vcol = f"{vtype}_vector_blob"
+            select_cols.append(f"{alias}.{vcol}")
+            join_strs.append(f"JOIN {vtable} {alias} ON i.id = {alias}.image_id")
+        return ", ".join(select_cols), " ".join(join_strs)
+
     def _count_records(self):
-        where_clause = " AND ".join(f"{col} IS NOT NULL" for col in self.vector_cols)
-        result = self.read_cur.execute(
-            f"SELECT COUNT(*) FROM images WHERE {where_clause}"
-        ).fetchone()
+        _, join_strs = self._make_select_and_joins()
+        query = f"SELECT COUNT(*) FROM images i {join_strs}"
+        result = self.read_cur.execute(query).fetchone()
         return result[0]
 
     def _batch_records(self):
-        where_clause = " AND ".join(f"{col} IS NOT NULL" for col in self.vector_cols)
-        select_cols = ", ".join(["id"] + self.vector_cols)
-        query = f"SELECT {select_cols} FROM images WHERE {where_clause}"
+        select_cols, join_strs = self._make_select_and_joins()
+        query = f"SELECT {select_cols} FROM images i {join_strs}"
         self.read_cur.execute(query)
         while True:
             rows = self.read_cur.fetchmany(self.batch_size)
@@ -205,8 +214,8 @@ class FAISSIndexBuilderDB:
 if __name__ == "__main__":
     builder = FAISSIndexBuilderDB(
         db_path="images.db",
-        vector_types=["sift_vlad"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
-        batch_size=1024,
+        vector_types=["color"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
+        batch_size=8192,
         hnsw_M=32,
         efConstruction=200,
         efSearch=50,

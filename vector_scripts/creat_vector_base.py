@@ -4,18 +4,16 @@ import sqlite3
 import pickle
 import logging
 from pathlib import Path
+from PIL import Image
+import numpy as np
 
 
 class BaseVectorIndexer:
-    """
-    Gemeinsame Basisklasse für alle Vektor-Indexer.
-    Unterklassen müssen implementieren:
-      - vector_column
-      - get_pending_rows
-      - compute_vectors
-    """
     vector_column: str = None
-    batch_size: int = 1000
+    batch_size: int = 1024
+    table_name: str = None
+    path_column: str = "path"
+    id_column: str = "image_id" 
 
     def __init__(
         self,
@@ -30,18 +28,12 @@ class BaseVectorIndexer:
         if batch_size is not None:
             self.batch_size = batch_size
 
-        # Logging setup
         self._setup_logging(log_file, log_dir)
         self._init_db()
 
-        # Handle Ctrl+C
         signal.signal(signal.SIGINT, self._handle_sigint)
 
     def _setup_logging(self, log_file: str, log_dir: str):
-        """
-        Initialisiert das Logging-Modul und schreibt das Logfile in den Unterordner `log_dir`.
-        Erzeugt das Verzeichnis bei Bedarf.
-        """
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         full_path = Path(log_dir) / log_file
 
@@ -55,9 +47,6 @@ class BaseVectorIndexer:
         self._log_and_print(f"Logging initialized at {full_path}", level="info")
 
     def _log_and_print(self, message: str, level: str = "info"):
-        """
-        Gibt die Nachricht auf der Konsole aus und loggt sie mit dem angegebenen Level.
-        """
         print(message)
         lvl = level.lower()
         if lvl == "info":
@@ -82,13 +71,16 @@ class BaseVectorIndexer:
         self.write_conn.execute("PRAGMA temp_store=MEMORY;")
         self._log_and_print(f"Connected to DB: {self.db_path}", level="info")
 
-
     def get_pending_rows(self, last_id: int):
-        """
-        Muss von Unterklassen implementiert werden.
-        Soll eine Liste von (id, rel_path)-Tuples zurückgeben.
-        """
-        raise NotImplementedError
+        cursor = self.read_conn.cursor()
+        sql = (
+            f"SELECT i.id, i.path FROM images i "
+            f"LEFT JOIN {self.table_name} v ON i.id = v.image_id "
+            f"WHERE v.{self.vector_column} IS NULL AND i.id > ? "
+            f"ORDER BY i.id ASC LIMIT ?"
+        )
+        return cursor.execute(sql, (last_id, self.batch_size)).fetchall()
+
 
     def compute_vectors(self, paths: list[str]):
         """
@@ -105,10 +97,14 @@ class BaseVectorIndexer:
         blobs = []
         for rec_id, vec in id_vec_pairs:
             blob = sqlite3.Binary(pickle.dumps(vec, protocol=pickle.HIGHEST_PROTOCOL))
-            blobs.append((blob, rec_id))
+            blobs.append((rec_id, blob))
 
         cursor = self.write_conn.cursor()
-        sql = f"UPDATE images SET {self.vector_column} = ? WHERE id = ?"
+        sql = (
+            f"INSERT INTO {self.table_name} (image_id, {self.vector_column}) "
+            f"VALUES (?, ?) "
+            f"ON CONFLICT(image_id) DO UPDATE SET {self.vector_column}=excluded.{self.vector_column}"
+        )
 
         try:
             self._log_and_print(f"Writing {len(blobs)} vectors to DB...", level="info")
@@ -120,20 +116,28 @@ class BaseVectorIndexer:
             self.write_conn.rollback()
             self._log_and_print(f"❌ Write failed, rolled back: {e}", level="error")
 
-    def run(self):
-        total = self.read_conn.cursor().execute(
-            f"SELECT COUNT(*) FROM images WHERE {self.vector_column} IS NULL"
-        ).fetchone()[0]
-        self._log_and_print(f"Starting indexing for {total} images…", level="info")
-
-        processed = 0
+    def batch_iterator(self):
         last_id = 0
         while True:
             rows = self.get_pending_rows(last_id)
             if not rows:
                 break
             ids, paths = zip(*rows)
+            yield ids, paths
             last_id = ids[-1]
+
+    def run(self):
+        total = self.read_conn.cursor().execute(
+            f"SELECT COUNT(*) "
+            f"FROM images i "
+            f"LEFT JOIN {self.table_name} v ON i.id = v.image_id "
+            f"WHERE v.{self.vector_column} IS NULL"
+        ).fetchone()[0]
+
+        self._log_and_print(f"Starting indexing for {total} images…", level="info")
+
+        processed = 0
+        for ids, paths in self.batch_iterator():
             self._log_and_print(
                 f"Batch: IDs {ids[0]}–{ids[-1]}, {len(ids)} images", level="info"
             )
@@ -146,3 +150,43 @@ class BaseVectorIndexer:
         self._log_and_print("✅ Indexing finished.", level="info")
         self.read_conn.close()
         self.write_conn.close()
+
+# --- top-level helpers für multiprocessing ---
+
+def load_image(
+    img_path,
+    img_size=None,
+    gray=False,
+    normalize=True,
+    to_numpy=False,
+    antialias=True,
+):
+    img_path = Path(img_path)
+    if not img_path.exists():
+        print(f"⚠️ Image not found: {img_path}")
+        return None
+    try:
+        img = Image.open(img_path)
+        if img.mode == "P":
+            if "transparency" in img.info or img.info.get("transparency") is not None:
+                img = img.convert("RGBA")
+            else:
+                img = img.convert("RGB")
+        elif gray:
+            img = img.convert("L")
+        else:
+            img = img.convert("RGB")
+        if img_size is not None:
+            resample = (
+                Image.Resampling.LANCZOS if antialias else Image.Resampling.NEAREST
+            )
+            img = img.resize(img_size, resample=resample)
+        if to_numpy:
+            img = np.array(img)
+            img = img.astype(np.float32)
+            if normalize:
+                img /= 255.0
+        return img
+    except Exception as e:
+        print(f"⚠️ Error reading {img_path}: {e}")
+        return None

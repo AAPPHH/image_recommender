@@ -2,16 +2,16 @@ import numpy as np
 from pathlib import Path
 import torch
 from dreamsim import dreamsim
-from PIL import Image
 
-from vector_scripts.creat_vector_base import BaseVectorIndexer
-
+try:
+    from creat_vector_base import BaseVectorIndexer, load_image
+except ImportError:
+    from vector_scripts.creat_vector_base import BaseVectorIndexer, load_image
 
 class DreamSimVectorIndexer(BaseVectorIndexer):
-    """
-    Erstellt normierte DreamSim-Feature-Vektoren.
-    """
-    vector_column = "dreamsim_vector_blob"
+    table_name = "dreamsim_vectors"             # NEU: Deine Tabelle!
+    vector_column = "dreamsim_vector_blob"      # Name des BLOB-Feldes
+    id_column = "image_id" 
 
     def __init__(
         self,
@@ -42,42 +42,45 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
         self.dim = emb.shape[-1]
         self._log_and_print("DreamSim model loaded and warmed up.", level="info")
 
-    def get_pending_rows(self, last_id: int):
-        cursor = self.read_conn.cursor()
-        sql = (
-            "SELECT id, path FROM images "
-            "WHERE dreamsim_vector_blob IS NULL AND id > ? "
-            "ORDER BY id ASC LIMIT ?"
-        )
-        return cursor.execute(sql, (last_id, self.batch_size)).fetchall()
-
     def _batch_image_to_vector(self, image_paths: list[str]) -> tuple[torch.Tensor, list[str]]:
-        """
-        Lädt Bilder, preprocessiert sie und liefert normierte Embeddings.
-        """
         images = []
         valid_paths = []
         for rel_path in image_paths:
             full_path = self.base_dir / "images_v3" / rel_path
+            img = load_image(full_path, img_size=(224, 224), gray=False, normalize=True, to_numpy=False, antialias=True)
+            if img is None:
+                self._log_and_print(f"⚠️ Error loading {full_path}", level="warning")
+                continue
             try:
-                img = Image.open(full_path).convert("RGB")
                 tensor = self.preprocess(img)
-                if tensor.ndim == 4 and tensor.size(0) == 1:
+                if tensor.ndim == 4 and tensor.shape[0] == 1:
                     tensor = tensor.squeeze(0)
+                if not (isinstance(tensor, torch.Tensor) and tensor.shape == (3, 224, 224)):
+                    self._log_and_print(
+                        f"❗️ Preprocess returned wrong shape for {full_path}: {tensor.shape}",
+                        level="warning"
+                    )
+                    continue
                 images.append(tensor)
                 valid_paths.append(rel_path)
             except Exception as e:
-                self._log_and_print(f"⚠️ Error opening {full_path}: {e}", level="warning")
+                self._log_and_print(f"⚠️ Preprocessing failed for {full_path}: {e}", level="warning")
+                continue
         if not images:
             return torch.empty(0, self.dim), []
-
         image_tensor = torch.stack(images).to(self.device)
+        print("Batch tensor shape:", image_tensor.shape)
         with torch.no_grad():
             embeddings = self.model.embed(image_tensor)
             embeddings = torch.nn.functional.normalize(embeddings, dim=-1)
         return embeddings.cpu(), valid_paths
 
+
     def compute_vectors(self, paths: list[str]) -> list[np.ndarray | None]:
+        """
+        Computes a DreamSim embedding for each image path.
+        Returns list of float32 numpy arrays (or None if image failed).
+        """
         results: list[np.ndarray | None] = [None] * len(paths)
         total_batches = (len(paths) + self.model_batch - 1) // self.model_batch
         for batch_idx, start in enumerate(range(0, len(paths), self.model_batch)):
@@ -90,11 +93,11 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
                 else:
                     results[start + j] = None
             self._log_and_print(
-                f"✅ Sub-Batch {batch_idx+1}/{total_batches} processed: {len(chunk)} images",
+                f"✅ Sub-batch {batch_idx+1}/{total_batches} processed: {len(chunk)} images",
                 level="info"
             )
         self._log_and_print(
-            f"👍 Alle {total_batches} Sub-Batches verarbeitet.",
+            f"👍 All {total_batches} sub-batches processed.",
             level="info"
         )
         return results

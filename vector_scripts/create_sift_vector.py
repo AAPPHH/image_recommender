@@ -1,18 +1,22 @@
-from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor
-from sklearn.decomposition import PCA
-import joblib
-import cv2
-import numpy as np
-from scipy.spatial.distance import cdist
 import os
 import random
+from pathlib import Path
+import cv2
+import joblib
+import numpy as np
+from concurrent.futures import ProcessPoolExecutor
+from scipy.spatial.distance import cdist
+from sklearn.decomposition import PCA
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.preprocessing import normalize
 
-from creat_vector_base import BaseVectorIndexer
+
+from creat_vector_base import BaseVectorIndexer, load_image
 
 class SIFTVLADVectorIndexer(BaseVectorIndexer):
-    vector_column = "sift_vlad_blob"
+    table_name = "sift_vectors"
+    vector_column = "sift_vector_blob"
+    id_column = "image_id"
     sift_img_size = (256, 256)
     codebook_path = "sift_codebook.npy"
     codebook = None
@@ -20,7 +24,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
     descriptor_dim = 128
     pca_path = "sift_vlad_pca.joblib"
     pca = None
-    pca_dim = 256 
+    pca_dim = 256
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -50,12 +54,12 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
             all_descs = []
             for img_path in img_paths:
-                img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+                img = load_image(img_path, img_size=cls.sift_img_size, gray=True, to_numpy=True)
                 if img is None:
                     continue
-                img = cv2.resize(img, (256, 256))
+                img8 = (img * 255).astype(np.uint8) if img.dtype == np.float32 else img
                 sift = cv2.SIFT_create()
-                _, descs = sift.detectAndCompute(img, None)
+                _, descs = sift.detectAndCompute(img8, None)
                 if descs is not None and len(descs) > 0:
                     all_descs.append(descs)
                 if sum(len(x) for x in all_descs) > sample_limit:
@@ -87,29 +91,20 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             self._log_and_print(f"Loaded PCA from {self.pca_path}", level="info")
         return self.pca
 
-    def get_pending_rows(self, last_id: int):
-        cursor = self.read_conn.cursor()
-        sql = (
-            "SELECT id, path FROM images "
-            "WHERE sift_vlad_blob IS NULL AND id > ? "
-            "ORDER BY id ASC LIMIT ?"
-        )
-        return cursor.execute(sql, (last_id, self.batch_size)).fetchall()
-
     @staticmethod
     def _compute_sift_vlad(args):
-        idx, rel_path, images_dir, codebook = args
+        idx, rel_path, images_dir, codebook, img_size = args
         img_path = Path(rel_path)
         if not img_path.is_absolute():
             img_path = images_dir / img_path
 
-        img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+        img = load_image(img_path, img_size=img_size, gray=True, to_numpy=True)
         if img is None:
             return (idx, None)
 
-        img = cv2.resize(img, (256, 256))
+        img8 = (img * 255).astype(np.uint8) if img.dtype == np.float32 else img
         sift = cv2.SIFT_create()
-        _, descriptors = sift.detectAndCompute(img, None)
+        _, descriptors = sift.detectAndCompute(img8, None)
 
         n_clusters, descriptor_dim = codebook.shape
         if descriptors is None or len(descriptors) == 0:
@@ -120,16 +115,20 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         for i, d in zip(idxs, descriptors):
             vlad[i] += d - codebook[i]
 
+        row_norms = np.linalg.norm(vlad, axis=1, keepdims=True)
+        row_norms[row_norms == 0] = 1
+        vlad = vlad / row_norms
+
         vlad = np.sign(vlad) * np.sqrt(np.abs(vlad))
         vlad = vlad.flatten()
         norm = np.linalg.norm(vlad)
         if norm:
-            vlad /= norm
+            vlad /= norm 
         return (idx, vlad)
 
     def compute_vectors(self, paths: list[str]):
         args = [
-            (idx, rel, self.images_dir, self.codebook)
+            (idx, rel, self.images_dir, self.codebook, self.sift_img_size)
             for idx, rel in enumerate(paths)
         ]
 
@@ -155,6 +154,9 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             compressed = self.pca.transform(vlad_matrix)
         else:
             compressed = self.pca.transform(np.stack(results))
+            
+        compressed = normalize(compressed, axis=1)
+
         return [vec.astype(np.float32) for vec in compressed]
 
 if __name__ == "__main__":

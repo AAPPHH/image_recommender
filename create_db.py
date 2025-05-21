@@ -44,29 +44,40 @@ class ImageDBCreator:
         timeout_sec = self.timeout / 1000
         return sqlite3.connect(uri, uri=True, timeout=timeout_sec)
 
-    def create_table(self):
+    def create_tables(self):
         """
-        Creates the 'images' table with BLOB columns and an index.
+        Creates 'images' table and separate vector tables for each vector type.
         """
         with self._connect() as conn:
             c = conn.cursor()
-            c.execute(
-                """
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS images (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    path TEXT UNIQUE,
-                    color_vector_blob BLOB,
-                    sift_vlad_vector_blob BLOB,
-                    dreamsim_vector_blob BLOB
+                    path TEXT UNIQUE
                 );
-                """
-            )
-            c.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_path ON images (path);
-                """
-            )	
-        print(f"Table 'images' in {self.db_path} is ready.")
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS color_vectors (
+                    image_id INTEGER PRIMARY KEY,
+                    color_vector_blob BLOB,
+                    FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE
+                );
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS sift_vectors (
+                    image_id INTEGER PRIMARY KEY,
+                    sift_vector_blob BLOB,
+                    FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE
+                );
+            """)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS dreamsim_vectors (
+                    image_id INTEGER PRIMARY KEY,
+                    dreamsim_vector_blob BLOB,
+                    FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE
+                );
+            """)
+        print(f"Tables created in {self.db_path}.")
 
     def _batch_generator(self):
         """
@@ -86,7 +97,7 @@ class ImageDBCreator:
             yield batch
 
     def process_batches(self):
-        self.create_table()
+        self.create_tables()
 
         with self._connect() as conn:
             c = conn.cursor()
