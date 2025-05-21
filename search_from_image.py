@@ -9,9 +9,6 @@ import cv2
 from pathlib import Path
 import seaborn as sns
 import matplotlib.pyplot as plt
-import lpips
-import torchvision.transforms as T
-from torchvision.transforms.functional import to_tensor
 from dreamsim import dreamsim
 from scipy.spatial.distance import cdist
 import joblib
