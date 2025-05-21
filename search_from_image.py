@@ -153,7 +153,7 @@ def extract_sift_vlad_features(image: Image.Image, path_rel: str) -> np.ndarray:
     Fällt optional auf On-the-fly-Berechnung zurück,
     falls der Eintrag noch nicht im Cache steht.
     """
-    col = "sift_vlad_blob"
+    col = "sift_vlad_vector_blob"
     cached = _get_db_vector(path_rel, col)
     if cached is not None:
         return cached
@@ -257,10 +257,11 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
         return
 
     path_rel = os.path.relpath(query_image_path, BASE_DIR)
-    requested = set(index_type.lower().split("_"))
-    valid = ["color", "hog", "lpips", "dreamsim", "sift_vlad"]   # <-- erweitert
-
+    # Akzeptiere nur einen oder mehrere Typen, getrennt durch Komma (nicht Unterstrich)
+    requested = [x.strip() for x in index_type.lower().split(",")]
+    valid = ["color", "hog", "lpips", "dreamsim", "sift_vlad"]
     ordered = [v for v in valid if v in requested]
+
     if not ordered:
         logging.error(f"Unbekannter index_type '{index_type}'. Wähle aus {valid}.")
         return
@@ -272,7 +273,7 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
             parts.append(extract_color_features(image, path_rel))
         elif vec_type == "lpips":
             parts.append(extract_lpips_features(image, path_rel))
-        elif vec_type in ("dreamsim"):
+        elif vec_type == "dreamsim":
             parts.append(extract_dreamsim_features(image, path_rel))
         elif vec_type == "hog":
             parts.append(extract_hog_features(image, path_rel))
@@ -281,6 +282,7 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
         else:
             logging.error(f"Unbekannter Vektor-Typ '{vec_type}' für '{path_rel}'.")
             return
+
 
     query_vec = np.concatenate(parts, axis=1).astype("float32")
     canonical = "_".join(ordered)
@@ -293,8 +295,18 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
     except Exception as e:
         logging.error(f"Fehler beim Laden des Index '{index_file}': {e}")
         return
+    print("==== FAISS DEBUG ====")
+    print("QUERY_VEC SHAPE:", query_vec.shape)
+    print("QUERY_VEC DTYPE:", query_vec.dtype)
+    print("QUERY_VEC MIN/MAX:", np.min(query_vec), np.max(query_vec))
+    print("INDEX DIM:", index.d)
+    print("INDEX TYPE:", type(index))
+    print("=====================")
 
     distances, indices = index.search(query_vec, TOP_K)
+    print("FAISS DISTANCES:", distances)
+    print("FAISS INDICES:", indices)
+
     logging.info(f"Distanzen: {distances[0]}")
 
     conn = sqlite3.connect(DB_PATH)
@@ -354,6 +366,6 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
 
 if __name__ == "__main__":
     query_image = (
-        r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\Landscapes\00000000_(6).jpg"
+        r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\Landscapes\00000000_(5).jpg"
     )
-    search_similar_images(query_image, index_type="color_hog")
+    search_similar_images(query_image, index_type="sift_vlad")

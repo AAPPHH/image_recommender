@@ -56,7 +56,7 @@ class ImageDBCreator:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path TEXT UNIQUE,
                     color_vector_blob BLOB,
-                    sift_vlad_blob BLOB,
+                    sift_vlad_vector_blob BLOB,
                     dreamsim_vector_blob BLOB
                 );
                 """
