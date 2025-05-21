@@ -10,8 +10,10 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.preprocessing import normalize
 
-
-from creat_vector_base import BaseVectorIndexer, load_image
+try:
+    from creat_vector_base import BaseVectorIndexer, load_image
+except ImportError:
+    from vector_scripts.creat_vector_base import BaseVectorIndexer, load_image
 
 class SIFTVLADVectorIndexer(BaseVectorIndexer):
     table_name = "sift_vectors"
