@@ -38,7 +38,7 @@ def main():
     dreamsim_indexer = DreamSimVectorIndexer(
         db_path=db_path,
         base_dir=base_dir,
-        batch_size=4096,
+        batch_size=16384,
         model_batch=128,
         log_file="dreamsim_indexer.log",
         log_dir="logs",

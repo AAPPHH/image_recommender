@@ -128,7 +128,7 @@ def extract_color_features(img_path: str, path_rel: str, bins: int = 16) -> np.n
     if exists is not None:
         return exists
     logging.info(f"Computing color features for '{path_rel}'.")
-    img = load_image(img_path, img_size=None, gray=False, normalize=False, to_numpy=True)
+    img = load_image(img_path, img_size=None, gray=False, normalize=False, use_cv2=True)
     if img is None:
         logging.error(f"Bild {img_path} konnte nicht geladen werden.")
         return None
@@ -151,7 +151,7 @@ def extract_sift_vlad_features(img_path: str, path_rel: str) -> np.ndarray:
     logging.warning(f"SIFT-VLAD nicht im Cache – berechne on-the-fly für '{path_rel}'.")
     codebook, pca = _load_sift_components()
 
-    gray = load_image(img_path, img_size=(256, 256), gray=True, to_numpy=True)
+    gray = load_image(img_path, img_size=(256, 256), use_cv2=True, gray=True, normalize=True, antialias=True)
     if gray is None:
         logging.error(f"Bild {img_path} konnte nicht geladen werden.")
         return None
@@ -192,7 +192,7 @@ def extract_dreamsim_features(img_path: str, path_rel: str) -> np.ndarray:
         return exists
     logging.info(f"Computing DreamSim features for '{path_rel}'.")
     model, preprocess = _load_dreamsim()
-    img = load_image(img_path, img_size=None, gray=False, normalize=False, to_numpy=False)
+    img = load_image(img_path, img_size=None)
     if img is None:
         logging.error(f"Bild {img_path} konnte nicht geladen werden.")
         return None
@@ -225,7 +225,7 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
         if vec_type == "color":
             parts.append(extract_color_features(query_image_path, path_rel))
         elif vec_type == "sift":
-                    parts.append(extract_sift_vlad_features(query_image_path, path_rel))
+            parts.append(extract_sift_vlad_features(query_image_path, path_rel))
         elif vec_type == "dreamsim":
             parts.append(extract_dreamsim_features(query_image_path, path_rel))
         else:
@@ -291,7 +291,7 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
     axes = axes.flatten()
 
-    img = load_image(query_image_path, img_size=None, gray=False, normalize=False, to_numpy=False)
+    img = load_image(query_image_path)
     axes[0].imshow(img)
     axes[0].set_title("Query Image")
     axes[0].axis("off")
@@ -299,7 +299,7 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
     for idx, (fp, dist) in enumerate(results):
         ax = axes[idx + 1]
         try:
-            img = load_image(fp, img_size=None, gray=False, normalize=False, to_numpy=False)
+            img = load_image(fp)
             ax.imshow(img)
             ax.set_title(f"{Path(fp).name}\nDist: {dist:.4f}")
             ax.axis("off")

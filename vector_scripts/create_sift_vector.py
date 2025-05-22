@@ -1,15 +1,17 @@
 import os
 import random
 from pathlib import Path
-import cv2
-import joblib
 import numpy as np
+import cv2
+import faiss
+from multiprocessing import shared_memory, get_context
 from concurrent.futures import ProcessPoolExecutor
-from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.preprocessing import normalize
+import joblib
 
+# Dummy-Import für load_image etc.
 try:
     from creat_vector_base import BaseVectorIndexer, load_image
 except ImportError:
@@ -27,6 +29,18 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
     pca_path = "sift_vlad_pca.joblib"
     pca = None
     pca_dim = 256
+
+    # Worker-Kontext als Klassenattribute (NUR im Worker-Prozess gültig)
+    _worker_codebook = None
+    _worker_index = None
+    _worker_sift = None
+    _worker_shm = None
+
+    os.environ["OMP_NUM_THREADS"] = "1"      # OpenMP
+    os.environ["OPENBLAS_NUM_THREADS"] = "1" # OpenBLAS
+    os.environ["MKL_NUM_THREADS"] = "1"      # Intel MKL
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # macOS/Accelerate
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -56,7 +70,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
             all_descs = []
             for img_path in img_paths:
-                img = load_image(img_path, img_size=cls.sift_img_size, gray=True, to_numpy=True)
+                img = load_image(img_path, img_size=cls.sift_img_size, use_cv2=True, gray=True, normalize=True, antialias=True)
                 if img is None:
                     continue
                 img8 = (img * 255).astype(np.uint8) if img.dtype == np.float32 else img
@@ -71,9 +85,8 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
                 raise RuntimeError("Keine Deskriptoren gefunden!")
 
             all_descs = np.vstack(all_descs)[:sample_limit]
-
             print("Starte KMeans mit", all_descs.shape, "...")
-            kmeans = MiniBatchKMeans(n_clusters=n_clusters, batch_size=4096, verbose=1).fit(all_descs)
+            kmeans = MiniBatchKMeans(n_clusters=n_clusters, batch_size=256, verbose=1).fit(all_descs)
             np.save(cls.codebook_path, kmeans.cluster_centers_)
             cls.codebook = kmeans.cluster_centers_
             cls.n_clusters = cls.codebook.shape[0]
@@ -93,54 +106,97 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             self._log_and_print(f"Loaded PCA from {self.pca_path}", level="info")
         return self.pca
 
-    @staticmethod
-    def _compute_sift_vlad(args):
-        idx, rel_path, images_dir, codebook, img_size = args
-        img_path = Path(rel_path)
-        if not img_path.is_absolute():
-            img_path = images_dir / img_path
+    # -----------------------------------------------
+    # OOP-Style Shared-Memory-Worker-Handling
+    # -----------------------------------------------
 
-        img = load_image(img_path, img_size=img_size, gray=True, to_numpy=True)
+    @classmethod
+    def _worker_init(cls, shm_name, codebook_shape, codebook_dtype):
+        """Wird einmal pro Worker aufgerufen."""
+        # Shared-Memory öffnen und als Array mappen (Zero-Copy!)
+        cls._worker_shm = shared_memory.SharedMemory(name=shm_name)
+        cls._worker_codebook = np.ndarray(codebook_shape, dtype=codebook_dtype, buffer=cls._worker_shm.buf)
+        cls._worker_index = faiss.IndexFlatL2(cls._worker_codebook.shape[1])
+        cls._worker_index.add(cls._worker_codebook)
+        cls._worker_sift = cv2.SIFT_create()
+
+    @classmethod
+    def _worker_finalize(cls):
+        """Shared-Memory in jedem Worker sauber schließen."""
+        if cls._worker_shm is not None:
+            cls._worker_shm.close()
+            cls._worker_shm = None
+
+    @classmethod
+    def _compute_sift_vlad_worker(cls, args):
+        idx, rel_path, images_dir, img_size = args
+
+        img_path = images_dir / rel_path
+        img = load_image(img_path, img_size=img_size,
+                         use_cv2=True, gray=True, normalize=True, antialias=True)
         if img is None:
             return (idx, None)
 
         img8 = (img * 255).astype(np.uint8) if img.dtype == np.float32 else img
-        sift = cv2.SIFT_create()
-        _, descriptors = sift.detectAndCompute(img8, None)
+        _, descriptors = cls._worker_sift.detectAndCompute(img8, None)
+        n_clusters, descriptor_dim = cls._worker_codebook.shape
 
-        n_clusters, descriptor_dim = codebook.shape
         if descriptors is None or len(descriptors) == 0:
             return (idx, np.zeros(n_clusters * descriptor_dim, dtype=np.float32))
 
-        idxs = np.argmin(cdist(descriptors, codebook), axis=1)
+        _, idxs = cls._worker_index.search(descriptors.astype(np.float32), 1)
+        idxs = idxs.ravel()
+
         vlad = np.zeros((n_clusters, descriptor_dim), dtype=np.float32)
         for i, d in zip(idxs, descriptors):
-            vlad[i] += d - codebook[i]
+            vlad[i] += d - cls._worker_codebook[i]
 
         row_norms = np.linalg.norm(vlad, axis=1, keepdims=True)
         row_norms[row_norms == 0] = 1
         vlad = vlad / row_norms
-
         vlad = np.sign(vlad) * np.sqrt(np.abs(vlad))
         vlad = vlad.flatten()
         norm = np.linalg.norm(vlad)
         if norm:
-            vlad /= norm 
+            vlad /= norm
         return (idx, vlad)
 
+    @staticmethod
+    def _clean_up_shm(shm):
+        try:
+            shm.close()
+            shm.unlink()
+        except FileNotFoundError:
+            pass
+
+    # -----------------------------------------------
+    # Hauptmethode
+    # -----------------------------------------------
+
     def compute_vectors(self, paths: list[str]):
-        args = [
-            (idx, rel, self.images_dir, self.codebook, self.sift_img_size)
-            for idx, rel in enumerate(paths)
-        ]
+        """Berechnet VLAD-Vektoren (OOP, SHM, keine globalen Variablen)."""
+        codebook_f32 = np.ascontiguousarray(self.codebook.astype(np.float32))
+        shm = shared_memory.SharedMemory(create=True, size=codebook_f32.nbytes)
+        shm_buf = np.ndarray(codebook_f32.shape, dtype=codebook_f32.dtype, buffer=shm.buf)
+        shm_buf[:] = codebook_f32
 
+        args = [(i, rel, self.images_dir, self.sift_img_size) for i, rel in enumerate(paths)]
         result_dict = {}
-        self._log_and_print(f"Processing {len(args)} images with SIFT-VLAD...", level="info")
+        self._log_and_print(f"Processing {len(args)} images with SIFT-VLAD", level="info")
 
-        with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as exe:
-            for idx, vec in exe.map(self._compute_sift_vlad, args, chunksize=256):
+        ctx = get_context("spawn") if os.name == "nt" else get_context("fork")
+
+        with ProcessPoolExecutor(
+            max_workers=os.cpu_count() or 1,
+            mp_context=ctx,
+            initializer=self.__class__._worker_init,
+            initargs=(shm.name, codebook_f32.shape, codebook_f32.dtype)
+        ) as exe:
+            for idx, vec in exe.map(self.__class__._compute_sift_vlad_worker, args, chunksize=256):
                 if vec is not None:
                     result_dict[idx] = vec
+
+        self._clean_up_shm(shm)
 
         valid_indices = sorted(result_dict)
         results = [result_dict[i] for i in valid_indices]
@@ -156,9 +212,8 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             compressed = self.pca.transform(vlad_matrix)
         else:
             compressed = self.pca.transform(np.stack(results))
-            
-        compressed = normalize(compressed, axis=1)
 
+        compressed = normalize(compressed, axis=1)
         return [vec.astype(np.float32) for vec in compressed]
 
 if __name__ == "__main__":

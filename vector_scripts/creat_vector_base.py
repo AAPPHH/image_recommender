@@ -153,40 +153,54 @@ class BaseVectorIndexer:
 
 # --- top-level helpers für multiprocessing ---
 
+
 def load_image(
     img_path,
     img_size=None,
     gray=False,
     normalize=True,
-    to_numpy=False,
     antialias=True,
+    use_cv2=False,
 ):
     img_path = Path(img_path)
     if not img_path.exists():
         print(f"⚠️ Image not found: {img_path}")
         return None
     try:
-        img = Image.open(img_path)
-        if img.mode == "P":
-            if "transparency" in img.info or img.info.get("transparency") is not None:
-                img = img.convert("RGBA")
-            else:
-                img = img.convert("RGB")
-        elif gray:
-            img = img.convert("L")
-        else:
-            img = img.convert("RGB")
-        if img_size is not None:
-            resample = (
-                Image.Resampling.LANCZOS if antialias else Image.Resampling.NEAREST
-            )
-            img = img.resize(img_size, resample=resample)
-        if to_numpy:
-            img = np.array(img)
+        if use_cv2:
+            import cv2
+            flag = cv2.IMREAD_GRAYSCALE if gray else cv2.IMREAD_COLOR
+            img = cv2.imread(str(img_path), flag)
+            if img is None:
+                print(f"⚠️ Image not readable with cv2: {img_path}")
+                return None
+            if not gray:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            if img_size is not None:
+                interp = cv2.INTER_LANCZOS4 if antialias else cv2.INTER_NEAREST
+                img = cv2.resize(img, img_size, interpolation=interp)
             img = img.astype(np.float32)
             if normalize:
                 img /= 255.0
-        return img
+            return img
+        else:
+            img = Image.open(img_path)
+            if img.mode == "P":
+                if "transparency" in img.info or img.info.get("transparency") is not None:
+                    img = img.convert("RGBA")
+                else:
+                    img = img.convert("RGB")
+            elif gray:
+                img = img.convert("L")
+            else:
+                img = img.convert("RGB")
+            if img_size is not None:
+                resample = (
+                    Image.Resampling.LANCZOS if antialias else Image.Resampling.NEAREST
+                )
+                img = img.resize(img_size, resample=resample)
+            return img
     except Exception as e:
         print(f"⚠️ Error reading {img_path}: {e}")
         return None
+

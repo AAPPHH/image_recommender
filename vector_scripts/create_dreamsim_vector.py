@@ -47,7 +47,7 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
         valid_paths = []
         for rel_path in image_paths:
             full_path = self.base_dir / "images_v3" / rel_path
-            img = load_image(full_path, img_size=(224, 224), gray=False, normalize=True, to_numpy=False, antialias=True)
+            img = load_image(full_path, img_size=(224, 224), gray=False, normalize=True, antialias=True)
             if img is None:
                 self._log_and_print(f"⚠️ Error loading {full_path}", level="warning")
                 continue
