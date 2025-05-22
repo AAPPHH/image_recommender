@@ -212,7 +212,7 @@ def extract_dreamsim_features(img_path: str, path_rel: str) -> np.ndarray:
 def search_similar_images(query_image_path: str, index_type: str = "color"):
     path_rel = os.path.relpath(query_image_path, BASE_DIR)
     requested = [x.strip() for x in index_type.lower().split(",")]
-    valid = ["color", "hog", "lpips", "dreamsim", "sift"]
+    valid = ["color", "hog", "lpips", "dreamsim", "sift", "color_sift", "sift_dreamsim"]
     ordered = [v for v in valid if v in requested]
 
     if not ordered:
@@ -316,4 +316,4 @@ if __name__ == "__main__":
     query_image = (
         r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\coco2017_train\train2017\000000000034.jpg"
     )
-    search_similar_images(query_image, index_type="sift")
+    search_similar_images(query_image, index_type="color, sift")

@@ -8,3 +8,5 @@
 images_v3/
 models/
 __pycache__/
+*.pyc
+*.joblib
