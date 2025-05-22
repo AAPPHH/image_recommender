@@ -146,13 +146,27 @@ class FAISSIndexBuilderDB:
             ids.append(rec_id)
             embeddings.append(np.concatenate(parts))
         return ids, embeddings
+    
+    def find_valid_m(self, dim, candidates=(64, 56, 48, 32, 28, 24, 16, 12, 8)):
+        for m in candidates:
+            if dim % m == 0:
+                return m
+        return 1
 
     def _initialize_index(self, dim):
-        index = faiss.IndexHNSWFlat(dim, self.hnsw_M)
-        index.hnsw.efConstruction = self.efConstruction
-        index.hnsw.efSearch = self.efSearch
-        self._log(f"Created HNSW index (dim={dim}, M={self.hnsw_M})", level="info")
-        return index
+        coarse_quantizer = faiss.IndexHNSWFlat(dim, self.hnsw_M)
+        coarse_quantizer.hnsw.efConstruction = self.efConstruction
+        coarse_quantizer.hnsw.efSearch = self.efSearch
+
+        nlist = 2048 
+        m = self.find_valid_m(dim)
+        nbits =  12 
+        pq_index = faiss.IndexIVFPQ(coarse_quantizer, dim, nlist, m, nbits)
+
+        self._log(f"Created IndexHNSW2Level with IVFPQ (dim={dim}, nlist={nlist}, m={m}, nbits={nbits})", level="info")
+        return pq_index
+    
+
 
     def _store_offsets(self, ids, start_offset):
         pairs = [(rid, start_offset + i) for i, rid in enumerate(ids)]
@@ -180,7 +194,24 @@ class FAISSIndexBuilderDB:
             self._log("No complete embeddings found; aborting.", level="error")
             return
 
-        index = None
+        train_samples = []
+        for batch in self._batch_records():
+            _, embeddings = self._process_batch(batch)
+            if not embeddings:
+                continue
+            arr = np.stack(embeddings).astype("float32")
+            train_samples.append(arr)
+            if sum([a.shape[0] for a in train_samples]) > 1000_0000:
+                break
+        train_vecs = np.concatenate(train_samples, axis=0)[:1000_0000]
+
+        index = self._initialize_index(train_vecs.shape[1])
+
+        if hasattr(index, "train") and not index.is_trained:
+            self._log("Training IVFPQ...", level="info")
+            index.train(train_vecs)
+            self._log("IVFPQ trained.", level="info")
+
         offset_counter = 0
         batch_num = 0
 
@@ -191,9 +222,6 @@ class FAISSIndexBuilderDB:
                 continue
 
             arr = np.stack(embeddings).astype("float32")
-            if index is None:
-                index = self._initialize_index(arr.shape[1])
-
             index.add(arr)
             self._store_offsets(ids, offset_counter)
             offset_counter += len(ids)
@@ -210,11 +238,10 @@ class FAISSIndexBuilderDB:
         self.write_conn.close()
         self._log("Done.", level="info")
 
-
 if __name__ == "__main__":
     builder = FAISSIndexBuilderDB(
         db_path="images.db",
-        vector_types=["color", "sift"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
+        vector_types=["color"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
         batch_size=8192,
         hnsw_M=32,
         efConstruction=200,
