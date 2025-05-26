@@ -201,9 +201,9 @@ class FAISSIndexBuilderDB:
                 continue
             arr = np.stack(embeddings).astype("float32")
             train_samples.append(arr)
-            if sum([a.shape[0] for a in train_samples]) > 1000_0000:
+            if sum([a.shape[0] for a in train_samples]) > 1500_00000:
                 break
-        train_vecs = np.concatenate(train_samples, axis=0)[:1000_0000]
+        train_vecs = np.concatenate(train_samples, axis=0)[:1500_00000]
 
         index = self._initialize_index(train_vecs.shape[1])
 
@@ -211,7 +211,7 @@ class FAISSIndexBuilderDB:
             self._log("Training IVFPQ...", level="info")
             index.train(train_vecs)
             self._log("IVFPQ trained.", level="info")
-
+  
         offset_counter = 0
         batch_num = 0
 
@@ -241,7 +241,7 @@ class FAISSIndexBuilderDB:
 if __name__ == "__main__":
     builder = FAISSIndexBuilderDB(
         db_path="images.db",
-        vector_types=["color"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
+        vector_types=["sift"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
         batch_size=8192,
         hnsw_M=32,
         efConstruction=200,

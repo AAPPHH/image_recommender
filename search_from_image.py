@@ -314,6 +314,6 @@ def search_similar_images(query_image_path: str, index_type: str = "color"):
 
 if __name__ == "__main__":
     query_image = (
-        r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\coco2017_train\train2017\000000000034.jpg"
+        r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\coco2017_train\train2017\000000001108.jpg"
     )
     search_similar_images(query_image, index_type="sift")
