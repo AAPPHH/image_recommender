@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import cv2
 import faiss
+print("FAISS-GPU verfügbar!" if hasattr(faiss, "StandardGpuResources") else "Nur FAISS-CPU installiert.")
 from multiprocessing import shared_memory, get_context
 from concurrent.futures import ProcessPoolExecutor
 
@@ -37,7 +38,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.images_dir = self.base_dir / "images_v3"
+        self.images_dir = r"/mnt/c/Users/jfham/OneDrive/Dokumente/Workstation_Clones/image_recomender/image_recommender/images_v3" #self.base_dir / "images_v3"
         self.codebook = self.load_or_create_codebook(self.images_dir)
         if os.path.exists(self.pca_path):
             self.pca = self.load_pca()
@@ -65,7 +66,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             yield reservoir[start:start + batch_size]
 
     @classmethod
-    def load_or_create_codebook(cls, images_dir="images_v3", n_clusters=100_000, sample_limit=10_000_000, sample_size=1_000_000, batch_size=512):
+    def load_or_create_codebook(cls, images_dir="images_v3", n_clusters=250_000, sample_limit=25_000_000, sample_size=1_000_000, batch_size=512):
         if cls.codebook is not None:
             return cls.codebook
 
@@ -84,14 +85,14 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         n_processed = 0
         all_descs = []
 
-        batch_gen = cls.random_sample_paths_batch_generator(
+        batch_gen_for_codebook = cls.random_sample_paths_batch_generator(
             images_dir,
             sample_size=sample_size,
             batch_size=batch_size,
             img_formats=img_formats
         )
 
-        for batch in batch_gen:
+        for batch in batch_gen_for_codebook:
             args = [(Path(images_dir) / rel_path, sift_img_size) for rel_path in batch]
             with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as exe:
                 results = list(exe.map(cls._sift_descriptors_worker, args, chunksize=16))
@@ -111,7 +112,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         train_descs = np.vstack(all_descs)[:sample_limit]
         print("Starte FAISS KMeans mit", train_descs.shape[0], "Deskriptoren...")
         os.environ["OMP_NUM_THREADS"] = "24"  
-        kmeans = faiss.Kmeans(train_descs.shape[1], n_clusters, niter=25, verbose=True)
+        kmeans = faiss.Kmeans(
+            train_descs.shape[1], n_clusters,
+            niter=25, verbose=True,
+            **({"gpu": True} if hasattr(faiss, "StandardGpuResources") and faiss.get_num_gpus() > 0 else {})
+        )
         kmeans.train(train_descs)
         centroids = kmeans.centroids
         np.save(cls.codebook_path, centroids)
@@ -120,9 +125,6 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         os.environ["OMP_NUM_THREADS"] = "1" 
         print(f"✅ Codebook created and saved as {cls.codebook_path}")
         return cls.codebook
-
-
-
 
     @staticmethod
     def _sift_descriptors_worker(args):
@@ -184,11 +186,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     def train_pca_on_sample(self, pca_sample_size=50_000, batch_size=512):
         images_dir = "images_v3"
-        batch_gen = self.random_sample_paths_batch_generator(images_dir, pca_sample_size, batch_size)
+        batch_gen_for_pca = self.random_sample_paths_batch_generator(images_dir, pca_sample_size, batch_size)
         self._log_and_print(f"Starte PCA-Training auf zufälligem Sample von {pca_sample_size} Bildern in Batches.", level="info")
 
         all_vlad_vecs = []
-        for batch_idx, batch_paths in enumerate(batch_gen):
+        for batch_idx, batch_paths in enumerate(batch_gen_for_pca):
             vlad_vecs = self.compute_vectors(batch_paths)
             vlad_vecs = [vec for vec in vlad_vecs if vec is not None]
             if not vlad_vecs:
