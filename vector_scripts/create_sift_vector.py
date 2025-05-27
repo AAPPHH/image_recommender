@@ -1,4 +1,10 @@
 import os
+os.environ["OMP_NUM_THREADS"] = "1"      # OpenMP
+os.environ["OPENBLAS_NUM_THREADS"] = "1" # OpenBLAS
+os.environ["MKL_NUM_THREADS"] = "1"      # Intel MKL
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # macOS/Accelerate
+os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import random
 from pathlib import Path
 import numpy as np
@@ -6,12 +12,7 @@ import cv2
 import faiss
 from multiprocessing import shared_memory, get_context
 from concurrent.futures import ProcessPoolExecutor
-from sklearn.decomposition import IncrementalPCA
-from sklearn.cluster import MiniBatchKMeans
-from sklearn.preprocessing import normalize
-import joblib
 
-# Dummy-Import für load_image etc.
 try:
     from creat_vector_base import BaseVectorIndexer, load_image
 except ImportError:
@@ -24,27 +25,20 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
     sift_img_size = (512, 512)
     codebook_path = "sift_codebook.npy"
     codebook = None
-    n_clusters = 512
     descriptor_dim = 128
     pca_path = "sift_vlad_pca.joblib"
     pca = None
-    pca_dim = 256
+    pca_dim = 512
 
     _worker_codebook = None
     _worker_index = None
     _worker_sift = None
     _worker_shm = None
 
-    os.environ["OMP_NUM_THREADS"] = "1"      # OpenMP
-    os.environ["OPENBLAS_NUM_THREADS"] = "1" # OpenBLAS
-    os.environ["MKL_NUM_THREADS"] = "1"      # Intel MKL
-    os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # macOS/Accelerate
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.images_dir = self.base_dir / "images_v3"
-        self.codebook = self.load_or_create_codebook(self.images_dir, self.n_clusters)
+        self.codebook = self.load_or_create_codebook(self.images_dir)
         if os.path.exists(self.pca_path):
             self.pca = self.load_pca()
         else:
@@ -52,7 +46,26 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             self.train_pca_on_sample(pca_sample_size=50_000, batch_size=512)
 
     @classmethod
-    def load_or_create_codebook(cls, images_dir="images_v3", n_clusters=256, sample_limit=500000):
+    def random_sample_paths_batch_generator(cls, images_dir, sample_size=50_000, batch_size=512, img_formats=(".jpg", ".jpeg", ".png")):
+        reservoir = []
+        images_dir = Path(images_dir)
+        idx = 0
+        for ext in img_formats:
+            for img_path in images_dir.rglob(f"*{ext}"):
+                rel_path = img_path.relative_to(images_dir)
+                if idx < sample_size:
+                    reservoir.append(rel_path)
+                else:
+                    r = random.randint(0, idx)
+                    if r < sample_size:
+                        reservoir[r] = rel_path
+                idx += 1
+        reservoir = list(dict.fromkeys(reservoir))
+        for start in range(0, len(reservoir), batch_size):
+            yield reservoir[start:start + batch_size]
+
+    @classmethod
+    def load_or_create_codebook(cls, images_dir="images_v3", n_clusters=100_000, sample_limit=10_000_000, sample_size=1_000_000, batch_size=512):
         if cls.codebook is not None:
             return cls.codebook
 
@@ -61,48 +74,78 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             cls.n_clusters = cls.codebook.shape[0]
             print(f"✅ Codebook loaded from {cls.codebook_path}")
             return cls.codebook
-        else:
-            print("⚠️ Codebook not found! Creating new codebook...")
 
-            images_dir = Path(images_dir)
-            img_paths = list(images_dir.rglob("*.jpg"))
-            random.shuffle(img_paths)
+        print("⚠️ Codebook not found! Creating new codebook...")
 
-            all_descs = []
-            sift = cv2.SIFT_create(nfeatures=4000)
-            for img_path in img_paths:
-                img = load_image(img_path, img_size=cls.sift_img_size, use_cv2=True, gray=True, normalize=True, antialias=True)
-                if img is None:
-                    continue
-                img8 = (img * 255).astype(np.uint8) if img.dtype == np.float32 else img
-                _, descs = sift.detectAndCompute(img8, None)
+        img_formats = (".jpg", ".jpeg", ".png")
+        sift_img_size = cls.sift_img_size
+
+        total_descs = 0
+        n_processed = 0
+        all_descs = []
+
+        batch_gen = cls.random_sample_paths_batch_generator(
+            images_dir,
+            sample_size=sample_size,
+            batch_size=batch_size,
+            img_formats=img_formats
+        )
+
+        for batch in batch_gen:
+            args = [(Path(images_dir) / rel_path, sift_img_size) for rel_path in batch]
+            with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as exe:
+                results = list(exe.map(cls._sift_descriptors_worker, args, chunksize=16))
+            for descs in results:
                 if descs is not None and len(descs) > 0:
-                    descs = descs / (np.linalg.norm(descs, ord=1, axis=1, keepdims=True) + 1e-7)
-                    descs = np.sqrt(descs)
-                    descs = descs / (np.linalg.norm(descs, axis=1, keepdims=True) + 1e-7)
                     all_descs.append(descs)
-                if sum(len(x) for x in all_descs) > sample_limit:
-                    break
+                    total_descs += len(descs)
+            n_processed += len(batch)
+            print(f"Processed {n_processed} images, total {total_descs} descriptors.")
+            if total_descs >= sample_limit:
+                print(f"Sample limit {sample_limit} reached. Stopping collection.")
+                break
 
-            if not all_descs:
-                raise RuntimeError("Keine Deskriptoren gefunden!")
+        if not all_descs:
+            raise RuntimeError("Keine Deskriptoren gefunden!")
 
-            all_descs = np.vstack(all_descs)[:sample_limit]
-            print("Starte KMeans mit", all_descs.shape, "...")
-            kmeans = MiniBatchKMeans(n_clusters=n_clusters, batch_size=16384, verbose=1, init="k-means++" ).fit(all_descs)
-            np.save(cls.codebook_path, kmeans.cluster_centers_)
-            cls.codebook = kmeans.cluster_centers_
-            cls.n_clusters = cls.codebook.shape[0]
-            print(f"✅ Codebook created and saved as {cls.codebook_path}")
-            return cls.codebook
+        train_descs = np.vstack(all_descs)[:sample_limit]
+        print("Starte FAISS KMeans mit", train_descs.shape[0], "Deskriptoren...")
+        os.environ["OMP_NUM_THREADS"] = "24"  
+        kmeans = faiss.Kmeans(train_descs.shape[1], n_clusters, niter=25, verbose=True)
+        kmeans.train(train_descs)
+        centroids = kmeans.centroids
+        np.save(cls.codebook_path, centroids)
+        cls.codebook = centroids
+        cls.n_clusters = centroids.shape[0]
+        os.environ["OMP_NUM_THREADS"] = "1" 
+        print(f"✅ Codebook created and saved as {cls.codebook_path}")
+        return cls.codebook
 
+
+
+
+    @staticmethod
+    def _sift_descriptors_worker(args):
+        img_path, sift_img_size = args
+        img = load_image(img_path, img_size=sift_img_size, use_cv2=True, gray=True, normalize=True, antialias=True)
+        if img is None:
+            return None
+        img8 = (img * 255).astype(np.uint8) if img.dtype == np.float32 else img
+        sift = cv2.SIFT_create(nfeatures=1000)
+        _, descs = sift.detectAndCompute(img8, None)
+        if descs is not None and len(descs) > 0:
+            descs = descs / (np.linalg.norm(descs, ord=1, axis=1, keepdims=True) + 1e-7)
+            descs = np.sqrt(descs)
+            descs = descs / (np.linalg.norm(descs, axis=1, keepdims=True) + 1e-7)
+            return descs
+        return None
 
     def load_pca(self):
         if self.pca is None:
-            self.pca = joblib.load(self.pca_path)
+            import faiss
+            self.pca = faiss.read_VectorTransform(self.pca_path)
             self._log_and_print(f"Loaded PCA from {self.pca_path}", level="info")
         return self.pca
-
 
     @classmethod
     def _worker_init(cls, shm_name, codebook_shape, codebook_dtype):
@@ -114,12 +157,12 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         d = cls._worker_codebook.shape[1]
         hnsw_m = 48
         index = faiss.IndexHNSWFlat(d, hnsw_m)
-        index.hnsw.efSearch = 64
+        index.hnsw.efSearch = 128
         index.hnsw.efConstruction = 200
         index.add(cls._worker_codebook.astype(np.float32))
 
         cls._worker_index = index
-        cls._worker_sift = cv2.SIFT_create(nfeatures=1000)
+        cls._worker_sift = cv2.SIFT_create(nfeatures=4000)
 
 
     @classmethod
@@ -128,6 +171,44 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         if cls._worker_shm is not None:
             cls._worker_shm.close()
             cls._worker_shm = None
+
+
+    @staticmethod
+    def _clean_up_shm(shm):
+        try:
+            shm.close()
+            shm.unlink()
+        except FileNotFoundError:
+            pass
+
+
+    def train_pca_on_sample(self, pca_sample_size=50_000, batch_size=512):
+        images_dir = "images_v3"
+        batch_gen = self.random_sample_paths_batch_generator(images_dir, pca_sample_size, batch_size)
+        self._log_and_print(f"Starte PCA-Training auf zufälligem Sample von {pca_sample_size} Bildern in Batches.", level="info")
+
+        all_vlad_vecs = []
+        for batch_idx, batch_paths in enumerate(batch_gen):
+            vlad_vecs = self.compute_vectors(batch_paths)
+            vlad_vecs = [vec for vec in vlad_vecs if vec is not None]
+            if not vlad_vecs:
+                self._log_and_print(f"No valid VLAD vectors in batch {batch_idx+1}!", level="error")
+                continue
+            all_vlad_vecs.extend(vlad_vecs)
+            self._log_and_print(f"PCA-Batch {batch_idx + 1} gesammelt: {len(vlad_vecs)} VLADs (total: {len(all_vlad_vecs)})", level="debug")
+            if len(all_vlad_vecs) >= pca_sample_size:
+                break
+
+        all_vlad_vecs = all_vlad_vecs[:pca_sample_size]
+        vlad_matrix = np.stack(all_vlad_vecs).astype(np.float32)
+
+        self._log_and_print(f"Starte FAISS PCA-Training auf Matrix {vlad_matrix.shape}", level="info")
+        pca = faiss.PCAMatrix(vlad_matrix.shape[1], self.pca_dim, eigen_power=-0.5, random_rotation=False)
+        pca.train(vlad_matrix)
+        faiss.write_VectorTransform(pca, self.pca_path)
+        self.pca = pca
+        self._log_and_print(f"PCA-Training (FAISS) abgeschlossen und gespeichert unter {self.pca_path}", level="info")
+        return pca
 
     @classmethod
     def _compute_sift_vlad_worker(cls, args):
@@ -169,54 +250,6 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             vlad /= norm
 
         return (idx, vlad)
-
-    @staticmethod
-    def _clean_up_shm(shm):
-        try:
-            shm.close()
-            shm.unlink()
-        except FileNotFoundError:
-            pass
-
-    def random_sample_paths_batch_generator(self, images_dir, sample_size=50_000, batch_size=512, pattern="*.jpg"):
-        reservoir = []
-        images_dir = Path(images_dir)
-        for idx, img_path in enumerate(images_dir.rglob(pattern)):
-            rel_path = img_path.relative_to(images_dir)
-            if idx < sample_size:
-                reservoir.append(rel_path)
-            else:
-                r = random.randint(0, idx)
-                if r < sample_size:
-                    reservoir[r] = rel_path
-        for start in range(0, len(reservoir), batch_size):
-            yield reservoir[start:start + batch_size]
-
-
-    def train_pca_on_sample(self, pca_sample_size=50_000, batch_size=512):
-        images_dir = "images_v3"
-        batch_gen = self.random_sample_paths_batch_generator(images_dir, pca_sample_size, batch_size)
-        self._log_and_print(f"Starte PCA-Training auf zufälligem Sample von {pca_sample_size} Bildern in Batches.", level="info")
-
-        ipca = IncrementalPCA(n_components=self.pca_dim, whiten=True, batch_size=batch_size)
-
-        for batch_idx, batch_paths in enumerate(batch_gen):
-            vlad_vecs = self.compute_vectors(batch_paths)
-            # Filter out None results (if compute_vectors returns a mix)
-            vlad_vecs = [vec for vec in vlad_vecs if vec is not None]
-            if not vlad_vecs:
-                self._log_and_print(f"No valid VLAD vectors in batch {batch_idx+1}!", level="error")
-                continue
-            vlad_matrix = np.stack(vlad_vecs)
-            ipca.partial_fit(vlad_matrix)
-            self._log_and_print(f"PCA-Batch {batch_idx + 1} fit: {vlad_matrix.shape}", level="debug")
-
-
-        joblib.dump(ipca, self.pca_path)
-        self.pca = ipca
-        self._log_and_print(f"PCA-Training (Incremental) abgeschlossen und gespeichert unter {self.pca_path}", level="info")
-        return ipca
-
     # ----------------------------------------------
     # Hauptmethode
     # -----------------------------------------------
@@ -251,8 +284,8 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             self._log_and_print("PCA not initialized, returning raw VLAD vectors.", level="warning")
             return [vec.astype(np.float32) for vec in results]
         
-        compressed = self.pca.transform(np.stack(results))
-        compressed = normalize(compressed, axis=1)
+        compressed = self.pca.apply_py(np.stack(results))
+        compressed /= np.linalg.norm(compressed, axis=1, keepdims=True) + 1e-7
         return [vec.astype(np.float32) for vec in compressed]
 
 if __name__ == "__main__":

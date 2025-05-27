@@ -81,18 +81,19 @@ class ImageDBCreator:
 
     def _batch_generator(self):
         """
-        Walks through base_folder and yields batches of relative image paths.
+        Yields batches of relative image paths in self.base_folder.
+        Supports .jpg, .jpeg, .png, .bmp, .tif, .tiff, .webp.
         """
+        exts = (".jpg", ".jpeg", ".png")
+        base = Path(self.base_folder)
+        # Liste aller passenden Bilder, rekursiv
+        all_imgs = [p.relative_to(base) for ext in exts for p in base.rglob(f"*{ext}")]
         batch = []
-        for root, _, files in os.walk(self.base_folder):
-            for file in files:
-                if file.lower().endswith((".jpg", ".jpeg", ".png")):
-                    full = Path(root) / file
-                    rel = full.relative_to(self.base_folder)
-                    batch.append(str(rel))
-                    if len(batch) >= self.batch_size:
-                        yield batch
-                        batch = []
+        for rel_path in all_imgs:
+            batch.append(str(rel_path))
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
         if batch:
             yield batch
 
