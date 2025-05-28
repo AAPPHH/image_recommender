@@ -10,3 +10,5 @@ models/
 __pycache__/
 *.pyc
 *.joblib
+*.pt
+*.idx
