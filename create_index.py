@@ -153,20 +153,24 @@ class FAISSIndexBuilderDB:
                 return m
         return 1
 
-    def _initialize_index(self, dim):
-        coarse_quantizer = faiss.IndexHNSWFlat(dim, self.hnsw_M)
-        coarse_quantizer.hnsw.efConstruction = self.efConstruction
-        coarse_quantizer.hnsw.efSearch = self.efSearch
+    def _initialize_index(self, dim, use_pq=False):
+        if use_pq:
+            coarse_quantizer = faiss.IndexHNSWFlat(dim, self.hnsw_M)
+            coarse_quantizer.hnsw.efConstruction = self.efConstruction
+            coarse_quantizer.hnsw.efSearch = self.efSearch
 
-        nlist = 2048 
-        m = self.find_valid_m(dim)
-        nbits =  12 
-        pq_index = faiss.IndexIVFPQ(coarse_quantizer, dim, nlist, m, nbits)
-
-        self._log(f"Created IndexHNSW2Level with IVFPQ (dim={dim}, nlist={nlist}, m={m}, nbits={nbits})", level="info")
-        return pq_index
-    
-
+            nlist = 2048
+            m = self.find_valid_m(dim)
+            nbits = 12
+            pq_index = faiss.IndexIVFPQ(coarse_quantizer, dim, nlist, m, nbits)
+            self._log(f"Created IndexHNSW2Level with IVFPQ (dim={dim}, nlist={nlist}, m={m}, nbits={nbits})", level="info")
+            return pq_index
+        else:
+            hnsw_index = faiss.IndexHNSWFlat(dim, self.hnsw_M)
+            hnsw_index.hnsw.efConstruction = self.efConstruction
+            hnsw_index.hnsw.efSearch = self.efSearch
+            self._log(f"Created HNSW-Flat index (dim={dim}, M={self.hnsw_M})", level="info")
+            return hnsw_index
 
     def _store_offsets(self, ids, start_offset):
         pairs = [(rid, start_offset + i) for i, rid in enumerate(ids)]

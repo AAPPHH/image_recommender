@@ -15,8 +15,7 @@ from concurrent.futures import ProcessPoolExecutor
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.amp import autocast, GradScaler
-
+import torch.nn.functional as F
 try:
     from creat_vector_base import BaseVectorIndexer, load_image
 except ImportError:
@@ -33,11 +32,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
     descriptor_dim = 128
     pca_path = "sift_vlad_pca.joblib"
     pca = None
-    pca_dim = 256
+    encoder_dim = 128
     n_clusters = 256
 
     _worker_codebook = None
-    _worker_index = None
+    _worker_index = None 
     _worker_sift = None
     _worker_shm = None
 
@@ -48,17 +47,63 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         self.index_path = "hnsw.idx"
         self.faiss_index = self.build_or_load_index(self.index_path)
 
-        if getattr(self, "encoder_model", None) is None:
-            try:
-                self._log_and_print("Kein Encoder gefunden, starte automatisches Autoencoder-Training...", level="info")
-                self.train_autoencoder_on_sample(epochs=50, batch_size=self.batch_size)
-            except ImportError:
-                self._log_and_print("TensorFlow/Keras nicht installiert, kann keinen Autoencoder trainieren!", level="warning")
-                self.encoder_model = None
+        try:
+            self._log_and_print("Kein Encoder gefunden, starte automatisches Autoencoder-Training...", level="info")
+            self.load_train_encoder_on_sample(epochs=300, batch_size=self.batch_size, latent_dim=self.encoder_dim)
+        except Exception as e:
+            self._log_and_print(f"Autoencoder-Training fehlgeschlagen: {e}", level="warning")
+            self.encoder_model = None 
+
+    class SIFTVLADEncoder(nn.Module):
+        def __init__(self, input_dim=32768, latent_dim=128, dropout_rate=0.1):
+            super().__init__()
+            self.encoder = nn.Sequential(
+                nn.Linear(input_dim, 669),
+                nn.LayerNorm(669),
+                nn.Mish(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(669, 317),
+                nn.LayerNorm(317),
+                nn.Mish(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(317, latent_dim)
+            )
+
+        def forward(self, x):
+            z = self.encoder(x)
+            z = F.normalize(z, p=2, dim=-1)
+            return z
+
+
+    @staticmethod  
+    def isometry_loss_corr(x, z, sample_k=None, eps=1e-8):
+        if sample_k is not None and sample_k < x.size(0):
+            idx = torch.randperm(x.size(0), device=x.device)[:sample_k]
+            x, z = x[idx], z[idx]
+        D_x = torch.cdist(x, x)
+        D_z = torch.cdist(z, z)
+        Dx_flat = D_x.triu(1).flatten()
+        Dz_flat = D_z.triu(1).flatten()
+        Dx_mean = Dx_flat.mean()
+        Dz_mean = Dz_flat.mean()
+        Dx_centered = Dx_flat - Dx_mean
+        Dz_centered = Dz_flat - Dz_mean
+        corr_num = (Dx_centered * Dz_centered).sum()
+        corr_den = (Dx_centered.pow(2).sum().sqrt() * Dz_centered.pow(2).sum().sqrt()) + eps
+        corr = corr_num / corr_den
+        return 1 - corr
+    
+    @staticmethod
+    def umap_loss(x, z, temperature=1.5):
+        D_x = torch.cdist(x, x)
+        D_z = torch.cdist(z, z)
+        probs_x = torch.softmax(-D_x / temperature, dim=1)
+        probs_z = torch.softmax(-D_z / temperature, dim=1)
+        return F.kl_div(probs_z.log(), probs_x, reduction="batchmean")
 
     @classmethod
     def random_sample_paths_batch_generator(
-        cls, images_dir, sample_size=50_000, batch_size=512, img_formats=(".jpg", ".jpeg", ".png")
+        cls, images_dir, sample_size=50_000, batch_size=512, img_formats=(".jpg", ".jpeg", ".png"), n_repeats=1
     ):
         images_dir = Path(images_dir)
         all_paths = []
@@ -73,9 +118,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             sample = random.sample(all_paths, sample_size)
         else:
             sample = all_paths
+        # Duplizieren
+        sample = list(sample) * n_repeats
+        random.shuffle(sample)
         for start in range(0, len(sample), batch_size):
             yield sample[start : start + batch_size]
-
 
     @classmethod
     def load_or_create_codebook(cls, images_dir="images_v3", n_clusters=256, sample_limit=5_120_000, sample_size=1_000_000, batch_size=512):
@@ -87,7 +134,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             cls.n_clusters = cls.codebook.shape[0]
             print(f"✅ Codebook loaded from {cls.codebook_path}")
             return cls.codebook
-
+ 
         print("⚠️ Codebook not found! Creating new codebook...")
 
         img_formats = (".jpg", ".jpeg", ".png")
@@ -151,13 +198,6 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             descs = descs / (np.linalg.norm(descs, axis=1, keepdims=True) + 1e-7)
             return descs
         return None
-
-    def load_pca(self):
-        if self.pca is None:
-            self.pca = faiss.read_VectorTransform(self.pca_path)
-            self._log_and_print(f"Loaded PCA from {self.pca_path}", level="info")
-        return self.pca
-    
     
     def build_or_load_index(
         self, 
@@ -209,16 +249,26 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             shm.unlink()
         except FileNotFoundError:
             pass
+    
 
+    def load_train_encoder_on_sample(self, sample_size=500_000, batch_size=None, latent_dim=None, epochs=25):
+        encoder_path = "sift_vlad_encoder.pt"
+        # --- Laden, falls Encoder schon existiert ---
+        if os.path.exists(encoder_path):
+            input_dim = self.n_clusters * self.descriptor_dim
+            model = self.SIFTVLADEncoder(input_dim, latent_dim).to(self.device)  # <--- global referenziert!
+            model.load_state_dict(torch.load(encoder_path, map_location=self.device))
+            model.eval()
+            self._log_and_print(f"Loaded encoder from {encoder_path}", level="info")
+            self.encoder_model = model
+            return model
 
-    def train_autoencoder_on_sample(self, sample_size=500_000, batch_size=None, latent_dim=None, epochs=25):
-  
         print(f"Using device: {self.device}")
-
         batch_gen = self.random_sample_paths_batch_generator(
                 images_dir=self.images_dir,
                 sample_size=sample_size,
-                batch_size=batch_size
+                batch_size=batch_size,
+                n_repeats=4
             )
 
         first_batch = next(batch_gen)
@@ -228,59 +278,12 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             raise ValueError("First batch contains no valid VLAD vectors!")
         X_sample = np.stack(vlad_vecs).astype(np.float32)
         input_dim = X_sample.shape[1]
-        if latent_dim is None:
-            latent_dim = self.pca_dim
 
-        class Autoencoder(nn.Module):
-            def __init__(self, input_dim=32768, latent_dim=256, dropout_rate=0.1):
-                super().__init__()
-                self.encoder = nn.Sequential(
-                    nn.Linear(input_dim, 2048),
-                    nn.LayerNorm(2048),
-                    nn.GELU(),
-                    nn.Dropout(dropout_rate),
-                    nn.Linear(2048, 512),
-                    nn.LayerNorm(512),
-                    nn.GELU(),
-                    nn.Dropout(dropout_rate),
-                    nn.Linear(512, latent_dim)
-                )
-                self.decoder = nn.Sequential(
-                    nn.Linear(latent_dim, 512),
-                    nn.LayerNorm(512),
-                    nn.GELU(),
-                    nn.Dropout(dropout_rate),
-                    nn.Linear(512, 2048),
-                    nn.LayerNorm(2048),
-                    nn.GELU(),
-                    nn.Dropout(dropout_rate),
-                    nn.Linear(2048, input_dim)
-                )
-                self._initialize_weights()
+        # --- Encoder only ---
+        model = self.SIFTVLADEncoder(input_dim, latent_dim, dropout_rate=0.1).to(self.device)
+        optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 
-
-            def _initialize_weights(self):
-                for m in self.modules():
-                    if isinstance(m, nn.Linear):
-                        nn.init.kaiming_normal_(m.weight)
-                        if m.bias is not None:
-                            nn.init.zeros_(m.bias)
-
-            def forward(self, x):
-                z = self.encoder(x)
-                x_recon = self.decoder(z)
-                return x_recon, z
-
-        model = Autoencoder(input_dim, latent_dim).to(self.device)
-        optimizer = optim.Adam(model.parameters(), lr=1e-3)
-        criterion = nn.MSELoss()
-
-        self._log_and_print(
-            f"Training autoencoder (PReLU, generator, PyTorch) with latent_dim={latent_dim}, epochs={epochs}",
-            level="info",
-        )
-
-        scaler = GradScaler("cuda")
+        self._log_and_print(f"Training encoder (Mish, LayerNorm, PyTorch) with latent_dim={latent_dim}, epochs={epochs}", level="info")
 
         for epoch in range(epochs):
             if epoch == 0:
@@ -297,24 +300,26 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
                 if len(vlad_vecs) == 0:
                     continue
                 X = np.stack(vlad_vecs).astype(np.float32)
-                X_tensor = torch.from_numpy(X).to(self.device)
-                optimizer.zero_grad()
-                with autocast("cuda"):
-                    x_recon, _ = model(X_tensor)
-                    loss = criterion(x_recon, X_tensor)
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-                avg_loss = loss.item()
-                self._log_and_print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.5f}", level="info")
+            
+            X_tensor = torch.from_numpy(X).to(self.device)
+            optimizer.zero_grad()
+            z = model(X_tensor)
+            loss_corr = self.isometry_loss_corr(X_tensor, z, sample_k=256)
+            loss_umap = self.umap_loss(X_tensor, z, temperature=1.5)
+            loss = 2.0 * loss_corr + 0.25 * loss_umap
+            loss.backward()
+            optimizer.step()
+            avg_loss = loss.item()
+            self._log_and_print(
+        f"Epoch {epoch+1:3}/{epochs} - loss={avg_loss:.5f}, corr={loss_corr.item():.5f}, umap={loss_umap.item():.5f}",
+        level="info"
+    )
 
+        torch.save(model.state_dict(), encoder_path)
+        self.encoder_model = model
+        self._log_and_print("Encoder-Training abgeschlossen (Mish, LayerNorm, PyTorch) und Encoder gespeichert.", level="info")
+        return model
 
-        torch.save(model.state_dict(), "sift_vlad_autoencoder.pt")
-        torch.save(model.encoder.state_dict(), "sift_vlad_encoder.pt")
-        self.encoder_model = model.encoder
-
-        self._log_and_print("Autoencoder-Training abgeschlossen (PReLU, generator, PyTorch) und Encoder gespeichert.", level="info")
-        return model.encoder
 
 
     @classmethod
@@ -394,11 +399,50 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             compressed /= np.linalg.norm(compressed, axis=1, keepdims=True) + 1e-7
             return [vec.astype(np.float32) for vec in compressed]
 
+
         self._log_and_print(
             "No Autoencoder initialized, returning raw VLAD vectors.",
             level="warning"
         )
         return [vec.astype(np.float32) for vec in results]
+
+    def export_vectors_to_hdf5(self, out_path="vlad_vectors.h5", n_samples=20000, batch_size=512):
+        import h5py
+        batch_gen = self.random_sample_paths_batch_generator(
+            self.images_dir, sample_size=n_samples, batch_size=batch_size
+        )
+        n_done = 0
+        first_vec = None
+        for batch in batch_gen:
+            vlad_vecs = self.compute_vectors(batch)
+            vlad_vecs = [vec for vec in vlad_vecs if vec is not None]
+            if len(vlad_vecs) == 0:
+                continue
+            first_vec = vlad_vecs[0]
+            break
+
+        if first_vec is None:
+            print("No vectors found!")
+            return
+
+        vec_dim = len(first_vec)
+        with h5py.File(out_path, "w") as f:
+            dset_vecs = f.create_dataset("vectors", (n_samples, vec_dim), dtype='float32')
+            batch_gen = self.random_sample_paths_batch_generator(
+                self.images_dir, sample_size=n_samples, batch_size=batch_size
+            )
+            for batch in batch_gen:
+                vlad_vecs = self.compute_vectors(batch)
+                for vec in vlad_vecs:
+                    if vec is not None:
+                        dset_vecs[n_done, :] = vec
+                        n_done += 1
+                        if n_done >= n_samples:
+                            break
+                if n_done >= n_samples:
+                    break
+                print(f"{n_done} Vektoren gespeichert ...")
+        print(f"✅ {n_done} Vektoren in {out_path} gespeichert (HDF5)")
 
 if __name__ == "__main__":
     print("FAISS-GPU verfügbar!" if hasattr(faiss, "StandardGpuResources") else "Nur FAISS-CPU installiert.")
@@ -406,8 +450,10 @@ if __name__ == "__main__":
     base_dir = Path().cwd()
     indexer = SIFTVLADVectorIndexer(
         db_path,
-        base_dir,
+        base_dir, 
         log_file="sift_vlad_indexer.log",
-        batch_size=4096,
+        batch_size=4096
     )
     indexer.run() 
+
+    # indexer.export_vectors_to_hdf5("vlad_vectors.hdf5", n_samples=100_000, batch_size=4096)

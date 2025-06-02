@@ -97,7 +97,7 @@ class ImageDBCreator:
         if batch:
             yield batch
 
-    def process_batches(self):
+    def process_batches(self): 
         self.create_tables()
 
         with self._connect() as conn:
