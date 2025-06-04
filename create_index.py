@@ -153,7 +153,7 @@ class FAISSIndexBuilderDB:
                 return m
         return 1
 
-    def _initialize_index(self, dim, use_pq=False):
+    def _initialize_index(self, dim, use_pq=True):
         if use_pq:
             coarse_quantizer = faiss.IndexHNSWFlat(dim, self.hnsw_M)
             coarse_quantizer.hnsw.efConstruction = self.efConstruction
@@ -245,7 +245,7 @@ class FAISSIndexBuilderDB:
 if __name__ == "__main__":
     builder = FAISSIndexBuilderDB(
         db_path="images.db",
-        vector_types=["sift"],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
+        vector_types=["sift" ],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
         batch_size=8192,
         hnsw_M=32,
         efConstruction=200,

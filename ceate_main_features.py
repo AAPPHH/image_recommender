@@ -17,7 +17,7 @@ def main():
     color_indexer = ColorVectorIndexer(
         db_path=db_path,
         base_dir=base_dir,
-        batch_size=16384,
+        batch_size=4096,
         log_file="color_indexer.log",
         log_dir="logs",
     )
@@ -29,7 +29,7 @@ def main():
         db_path,
         base_dir,
         log_file="sift_vlad_indexer.log",
-        batch_size=16384,
+        batch_size=4096,
     )
     indexer.run()
 
@@ -38,7 +38,7 @@ def main():
     dreamsim_indexer = DreamSimVectorIndexer(
         db_path=db_path,
         base_dir=base_dir,
-        batch_size=16384,
+        batch_size=4096,
         model_batch=128,
         log_file="dreamsim_indexer.log",
         log_dir="logs",

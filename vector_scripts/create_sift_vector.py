@@ -49,7 +49,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
         try:
             self._log_and_print("Kein Encoder gefunden, starte automatisches Autoencoder-Training...", level="info")
-            self.load_train_encoder_on_sample(epochs=300, batch_size=self.batch_size, latent_dim=self.encoder_dim)
+            self.load_train_encoder_on_sample(epochs=400, batch_size=self.batch_size, latent_dim=self.encoder_dim)
         except Exception as e:
             self._log_and_print(f"Autoencoder-Training fehlgeschlagen: {e}", level="warning")
             self.encoder_model = None 
@@ -118,7 +118,6 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             sample = random.sample(all_paths, sample_size)
         else:
             sample = all_paths
-        # Duplizieren
         sample = list(sample) * n_repeats
         random.shuffle(sample)
         for start in range(0, len(sample), batch_size):
@@ -221,7 +220,6 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             print("✅ Index geladen.")
         return index
 
-
     @classmethod
     def _worker_init(cls, shm_name, codebook_shape, codebook_dtype):
         cls._worker_shm = shared_memory.SharedMemory(name=shm_name)
@@ -233,14 +231,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         cls._worker_index = faiss.read_index(index_path)
         cls._worker_sift = cv2.SIFT_create(nfeatures=1000)
 
-
     @classmethod
     def _worker_finalize(cls):
-        """Shared-Memory in jedem Worker sauber schließen."""
         if cls._worker_shm is not None:
             cls._worker_shm.close()
             cls._worker_shm = None
-
 
     @staticmethod
     def _clean_up_shm(shm):
@@ -249,14 +244,12 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             shm.unlink()
         except FileNotFoundError:
             pass
-    
 
     def load_train_encoder_on_sample(self, sample_size=500_000, batch_size=None, latent_dim=None, epochs=25):
         encoder_path = "sift_vlad_encoder.pt"
-        # --- Laden, falls Encoder schon existiert ---
         if os.path.exists(encoder_path):
             input_dim = self.n_clusters * self.descriptor_dim
-            model = self.SIFTVLADEncoder(input_dim, latent_dim).to(self.device)  # <--- global referenziert!
+            model = self.SIFTVLADEncoder(input_dim, latent_dim).to(self.device)
             model.load_state_dict(torch.load(encoder_path, map_location=self.device))
             model.eval()
             self._log_and_print(f"Loaded encoder from {encoder_path}", level="info")
@@ -304,7 +297,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             X_tensor = torch.from_numpy(X).to(self.device)
             optimizer.zero_grad()
             z = model(X_tensor)
-            loss_corr = self.isometry_loss_corr(X_tensor, z, sample_k=256)
+            loss_corr = self.isometry_loss_corr(X_tensor, z, sample_k=1024)
             loss_umap = self.umap_loss(X_tensor, z, temperature=1.5)
             loss = 2.0 * loss_corr + 0.25 * loss_umap
             loss.backward()
@@ -456,4 +449,4 @@ if __name__ == "__main__":
     )
     indexer.run() 
 
-    # indexer.export_vectors_to_hdf5("vlad_vectors.hdf5", n_samples=100_000, batch_size=4096)
+    # indexer.export_vectors_to_hdf5("vlad_vectors.hdf5", n_samples=400_000, batch_size=4096)
