@@ -1,4 +1,3 @@
-import os
 import sqlite3
 from pathlib import Path
 
@@ -81,21 +80,20 @@ class ImageDBCreator:
 
     def _batch_generator(self):
         """
-        Yields batches of relative image paths in self.base_folder.
-        Supports .jpg, .jpeg, .png, .bmp, .tif, .tiff, .webp.
+        Yields batches of relative image paths in self.base_folder as POSIX (/) strings.
         """
         exts = (".jpg", ".jpeg", ".png")
         base = Path(self.base_folder)
-        # Liste aller passenden Bilder, rekursiv
-        all_imgs = [p.relative_to(base) for ext in exts for p in base.rglob(f"*{ext}")]
+        all_imgs = [p.relative_to(base).as_posix() for ext in exts for p in base.rglob(f"*{ext}")]
         batch = []
         for rel_path in all_imgs:
-            batch.append(str(rel_path))
+            batch.append(rel_path)  # already POSIX
             if len(batch) >= self.batch_size:
                 yield batch
                 batch = []
         if batch:
             yield batch
+
 
     def process_batches(self): 
         self.create_tables()

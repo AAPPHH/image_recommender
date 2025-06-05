@@ -245,7 +245,7 @@ class FAISSIndexBuilderDB:
 if __name__ == "__main__":
     builder = FAISSIndexBuilderDB(
         db_path="images.db",
-        vector_types=["sift" ],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
+        vector_types=["color" ],  # or any combination of ["clip", "color", "lpips", "dreamsim"]
         batch_size=8192,
         hnsw_M=32,
         efConstruction=200,
