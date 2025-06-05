@@ -1,4 +1,5 @@
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import logging
 import sqlite3
 import pickle
@@ -8,14 +9,12 @@ import faiss
 from pathlib import Path
 import seaborn as sns
 import matplotlib.pyplot as plt
-from dreamsim import dreamsim
-import joblib
-
-from vector_scripts.creat_vector_base import BaseVectorIndexer, load_image
+from vector_scripts.creat_vector_base import load_image
 
 class ImageRecommender:
     def __init__(
         self,
+        images_root="images_v3",
         db_path="images.db",
         use_gpu=True,
         sift_codebook_path="sift_codebook.npy",
@@ -25,6 +24,7 @@ class ImageRecommender:
         top_k=5
     ):
         self.base_dir = Path().expanduser().resolve()
+        self.images_root = (self.base_dir / images_root).resolve()
         self.db_path = Path(db_path).expanduser().resolve()
         self.use_gpu = use_gpu
         self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
@@ -44,36 +44,6 @@ class ImageRecommender:
             format="%(asctime)s [%(levelname)s] %(message)s"
         )
 
-    # ----------- Model/Component Loading ----------- #
-    def _load_dreamsim(self):
-        if self._ds_model is None or self._ds_preprocess is None:
-            self._ds_model, self._ds_preprocess = dreamsim(
-                pretrained=True,
-                device=self.device,
-                normalize_embeds=True,
-                dreamsim_type="ensemble",
-            )
-            self._ds_model.eval()
-        return self._ds_model, self._ds_preprocess
-
-    def _load_sift_components(self):
-        if self._sift_codebook is None:
-            if not os.path.exists(self.sift_codebook_path):
-                raise FileNotFoundError(
-                    f"Codebook fehlt: {self.sift_codebook_path}. "
-                    "Bitte zuerst mit dem Indexer erzeugen."
-                )
-            self._sift_codebook = np.load(self.sift_codebook_path).astype("float32")
-        if self._sift_pca is None:
-            if not os.path.exists(self.sift_pca_path):
-                raise FileNotFoundError(
-                    f"PCA fehlt: {self.sift_pca_path}. "
-                    "Bitte zuerst mit dem Indexer erzeugen."
-                )
-            self._sift_pca = joblib.load(self.sift_pca_path)
-        return self._sift_codebook, self._sift_pca
-
-    # ----------- DB Vector Reading ----------- #
     def _get_db_vector(self, path_rel: str, vector_table: str, vector_column: str) -> np.ndarray:
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -107,101 +77,146 @@ class ImageRecommender:
             return arr
         return None
 
-    # ----------- Feature Extraction ----------- #
-    def extract_color_features(self, img_path: str, path_rel: str, bins: int = 16) -> np.ndarray:
-        col = "color_vector_blob"
-        table = "color_vectors"
-        exists = self._get_db_vector(path_rel, table, col)
-        if exists is not None:
-            return exists
-        logging.info(f"Computing color features for '{path_rel}' via ColorVectorIndexer.")
-        from vector_scripts.create_color_vector import ColorVectorIndexer 
-        load_image_kwargs = dict(use_cv2=True)
-        images_dir = self.base_dir
-        args = (path_rel, images_dir, bins, load_image_kwargs)
-        vec = ColorVectorIndexer.compute_color_vector_worker(args)
-        if vec is None:
-            logging.error(f"Failed to compute color vector for '{img_path}'.")
-            return None
-        return vec.reshape(1, -1)
-
-    def extract_sift_vlad_features(self, img_path: str, path_rel: str) -> np.ndarray:
-        col = "sift_vector_blob"
-        table = "sift_vectors"
-        cached = self._get_db_vector(path_rel, table, col)
+    def get_or_compute_vector(self, path_rel: str, vector_table: str, vector_column: str, compute_func, reshape: tuple = None, print_vectors: bool = True) -> np.ndarray | None:
+        print(f"🔍 Suche Vektor '{vector_column}' für '{path_rel}' in DB...")
+        cached = self._get_db_vector(path_rel, vector_table, vector_column)
         if cached is not None:
+            print("✅ Vektor aus Cache geladen.")
+            if print_vectors:
+                print(f"[DB-Vektor]: {cached}")
             return cached
-        logging.warning(f"SIFT-VLAD nicht im Cache – berechne on-the-fly für '{path_rel}' via SIFTVLADVectorIndexer.")
-        from vector_scripts.create_sift_vector import SIFTVLADVectorIndexer
-        # Codebook und ggf. PCA laden wie gehabt (bzw. aus Indexer holen)
-        codebook, pca = self._load_sift_components()
-        images_dir = self.base_dir
-        img_size = (512, 512)  # Standard für SIFT-VLAD bei dir
-        args = (path_rel, images_dir, codebook, img_size)
-        vlad = SIFTVLADVectorIndexer.compute_sift_vlad_vector_worker(args)
-        if vlad is None:
-            logging.error(f"Failed to compute SIFT-VLAD vector for '{img_path}'.")
-            return None
-        # Optional: Encoder oder PCA (wie in deinem Batch-Indexer)
-        if pca is not None:
-            vlad = pca.transform(vlad.reshape(1, -1)).astype(np.float32)
-            vlad /= np.linalg.norm(vlad)
-        else:
-            vlad = vlad.reshape(1, -1)
-        return vlad
 
-    def extract_dreamsim_features(self, img_path: str, path_rel: str) -> np.ndarray:
-        table = "dreamsim_vectors"
-        column = "dreamsim_vector_blob"
-        exists = self._get_db_vector(path_rel, table, column)
-        if exists is not None:
-            return exists
-        logging.info(f"Computing DreamSim features for '{path_rel}' via DreamSimVectorIndexer.")
-        from vector_scripts.create_dreamsim_vector import DreamSimVectorIndexer
-        # Modell und Preprocess ggf. lazy laden
-        model, preprocess = self._load_dreamsim()
-        images_dir = self.base_dir
-        args = (path_rel, images_dir, preprocess, model, self.device)
-        vec = DreamSimVectorIndexer.compute_dreamsim_vector_worker(args)
+        vec = compute_func()
         if vec is None:
-            logging.error(f"Failed to compute DreamSim vector for '{img_path}'.")
+            logging.error(f"Failed to compute {vector_column} for '{path_rel}'.")
             return None
+        if print_vectors:
+            print(f"[Neu berechneter Vektor]: {vec}")
+        if reshape is not None:
+            vec = vec.reshape(*reshape)
         return vec
 
+    def extract_color_features(self, path_rel: str) -> np.ndarray:
+        from vector_scripts.create_color_vector import ColorVectorIndexer
+        def compute():
+            indexer = ColorVectorIndexer(
+                db_path="images.db",
+                base_dir=self.base_dir,
+                log_file="color_indexer.log",
+                batch_size=16384
+            )
+            vec = indexer.compute_vectors([path_rel])[0]
+            return vec
+        return self.get_or_compute_vector(
+            path_rel,
+            vector_table="color_vectors",
+            vector_column="color_vector_blob",
+            compute_func=compute,
+            reshape=(1, -1),
+        )
+
+    def extract_sift_vlad_features(self, path_rel: str) -> np.ndarray:
+        from vector_scripts.create_sift_vector import SIFTVLADVectorIndexer
+        def compute():
+            indexer = SIFTVLADVectorIndexer(
+                db_path="images.db",
+                base_dir=self.base_dir, 
+                log_file="sift_vlad.log",
+                batch_size=256
+            )
+            return indexer.compute_vectors([path_rel])[0]
+        return self.get_or_compute_vector(
+            path_rel,
+            vector_table="sift_vectors",
+            vector_column="sift_vector_blob",
+            compute_func=compute,
+        )
+
+    def extract_dreamsim_features(self, path_rel: str) -> np.ndarray:
+        from vector_scripts.create_dreamsim_vector import DreamSimVectorIndexer
+        def compute():
+            if not hasattr(self, "_dreamsim_indexer"):
+                self._dreamsim_indexer = DreamSimVectorIndexer(
+                    db_path=str(self.db_path),
+                    base_dir=str(self.base_dir),
+                    batch_size=4096,
+                    model_batch=128,
+                    log_file="dreamsim_indexer.log",
+                    log_dir="logs",
+                )
+            embeddings, valid_paths = self._dreamsim_indexer._batch_image_to_vector([path_rel])
+            if len(valid_paths) == 1 and embeddings.shape[0] == 1:
+                return embeddings[0].numpy().reshape(1, -1)
+        return self.get_or_compute_vector(
+            path_rel,
+            vector_table="dreamsim_vectors",
+            vector_column="dreamsim_vector_blob",
+            compute_func=compute,
+        )
 
     # ----------- Main Search Method ----------- #
     def search_similar_images(self, query_image_path: str, index_type: str = "color"):
-        path_rel = os.path.relpath(query_image_path, self.base_dir)
+        path_rel = str(Path(query_image_path).resolve().relative_to(self.images_root))
+        ordered = self._get_ordered_index_types(index_type)
+        if not ordered:
+            return
+        query_vec = self._extract_query_vector(path_rel, ordered)
+        if query_vec is None:
+            return
+        canonical = "_".join(ordered)
+        index, offset_table = self._load_faiss_index(canonical)
+        if index is None:
+            return
+        distances, indices = index.search(query_vec, self.top_k)
+        results = self._fetch_results(indices, distances, offset_table)
+        if not results:
+            logging.error("Keine ähnlichen Bilder gefunden.")
+            return
+        self._plot_results(query_image_path, results)
+
+    def _get_ordered_index_types(self, index_type: str):
         requested = [x.strip() for x in index_type.lower().split(",")]
         valid = ["color", "hog", "lpips", "dreamsim", "sift", "color_sift", "sift_dreamsim"]
         ordered = [v for v in valid if v in requested]
         if not ordered:
             logging.error(f"Unbekannter index_type '{index_type}'. Wähle aus {valid}.")
-            return
+            return []
         logging.info(f"🔍 Extrahiere Features in Reihenfolge: {ordered}")
+        return ordered
+
+    def _extract_query_vector(self, path_rel, ordered):
         parts = []
         for vec_type in ordered:
             if vec_type == "color":
-                parts.append(self.extract_color_features(query_image_path, path_rel))
+                parts.append(self.extract_color_features(path_rel))
             elif vec_type == "sift":
-                parts.append(self.extract_sift_vlad_features(query_image_path, path_rel))
+                parts.append(self.extract_sift_vlad_features(path_rel))
             elif vec_type == "dreamsim":
-                parts.append(self.extract_dreamsim_features(query_image_path, path_rel))
+                parts.append(self.extract_dreamsim_features(path_rel))
             else:
                 logging.error(f"Unbekannter Vektor-Typ '{vec_type}' für '{path_rel}'.")
-                return
-        query_vec = np.concatenate(parts, axis=1).astype("float32")
-        canonical = "_".join(ordered)
+                return None
+        if len(parts) == 1:
+            query_vec = parts[0].astype("float32")
+        else:
+            parts = [x.reshape(1, -1) if x.ndim == 1 else x for x in parts]
+            query_vec = np.concatenate(parts, axis=1).astype("float32")
+        if query_vec.ndim == 1:
+            query_vec = query_vec.reshape(1, -1)
+        return query_vec
+
+    def _load_faiss_index(self, canonical):
         index_file = f"index_hnsw_{canonical}.faiss"
         offset_table = f"faiss_index_offsets_{canonical}"
         try:
             index = faiss.read_index(index_file)
             logging.info(f"Geladener FAISS-Index '{index_file}' mit {index.ntotal} Vektoren.")
+            return index, offset_table
         except Exception as e:
             logging.error(f"Fehler beim Laden des Index '{index_file}': {e}")
-            return
-        distances, indices = index.search(query_vec, self.top_k)
-        logging.info(f"Distanzen: {distances[0]}")
+            return None, None
+
+    def _fetch_results(self, indices, distances, offset_table):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         results = []
@@ -222,16 +237,16 @@ class ImageRecommender:
             full_path = os.path.join(self.base_dir, "images_v3", fp_row[0])
             results.append((full_path, float(distances[0, rank])))
         conn.close()
-        if not results:
-            logging.error("Keine ähnlichen Bilder gefunden.")
-            return
         results.sort(key=lambda x: x[1])
+        return results
+
+    def _plot_results(self, query_image_path, results):
         sns.set_theme(style="whitegrid")
         max_per_row = 3
         total_images = len(results) + 1
         ncols = max_per_row
         nrows = int(np.ceil(total_images / ncols))
-        fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
+        _ , axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
         axes = axes.flatten()
         img = load_image(query_image_path)
         axes[0].imshow(img)
