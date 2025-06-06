@@ -74,14 +74,12 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             z = F.normalize(z, p=2, dim=-1)
             return z
 
-
-    @staticmethod  
-    def isometry_loss_corr(x, z, sample_k=None, eps=1e-8):
-        if sample_k is not None and sample_k < x.size(0):
-            idx = torch.randperm(x.size(0), device=x.device)[:sample_k]
-            x, z = x[idx], z[idx]
-        D_x = torch.cdist(x, x)
-        D_z = torch.cdist(z, z)
+    @staticmethod
+    def isometry_loss_corr_from_dists(D_x, D_z, sample_k=None, eps=1e-8):
+        if sample_k is not None and sample_k < D_x.size(0):
+            idx = torch.randperm(D_x.size(0), device=D_x.device)[:sample_k]
+            D_x = D_x[idx][:, idx]
+            D_z = D_z[idx][:, idx]
         Dx_flat = D_x.triu(1).flatten()
         Dz_flat = D_z.triu(1).flatten()
         Dx_mean = Dx_flat.mean()
@@ -92,14 +90,13 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         corr_den = (Dx_centered.pow(2).sum().sqrt() * Dz_centered.pow(2).sum().sqrt()) + eps
         corr = corr_num / corr_den
         return 1 - corr
-    
+
     @staticmethod
-    def umap_loss(x, z, temperature=1.5):
-        D_x = torch.cdist(x, x)
-        D_z = torch.cdist(z, z)
+    def umap_loss_from_dists(D_x, D_z, temperature=1.5):
         probs_x = torch.softmax(-D_x / temperature, dim=1)
         probs_z = torch.softmax(-D_z / temperature, dim=1)
         return F.kl_div(probs_z.log(), probs_x, reduction="batchmean")
+
 
     @classmethod
     def random_sample_paths_batch_generator(
@@ -297,8 +294,12 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             X_tensor = torch.from_numpy(X).to(self.device)
             optimizer.zero_grad()
             z = model(X_tensor)
-            loss_corr = self.isometry_loss_corr(X_tensor, z, sample_k=1024)
-            loss_umap = self.umap_loss(X_tensor, z, temperature=1.5)
+            D_x = torch.cdist(X_tensor, X_tensor)
+            D_z = torch.cdist(z, z)
+
+            loss_corr = self.isometry_loss_corr_from_dists(D_x, D_z, sample_k=1024)
+            loss_umap = self.umap_loss_from_dists(D_x, D_z, temperature=1.5)
+
             loss = 2.0 * loss_corr + 0.25 * loss_umap
             loss.backward()
             optimizer.step()
