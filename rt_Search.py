@@ -1,20 +1,12 @@
 import os
-import sys
 import time
 import random
 import numpy as np
 import matplotlib.pyplot as plt
 from contextlib import contextmanager
 from pathlib import Path
-import traceback
-
-base_dir = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(base_dir))
-
 from search_from_image import ImageRecommender
-
-DB_PATH = str(base_dir / "images.db")
-IMAGES_ROOT = base_dir / "image_data"
+import traceback
 
 
 class Timer:
@@ -53,7 +45,7 @@ class MultiRecommender(ImageRecommender):
             return self._fetch_results(indices, distances, offset_table)
 
 
-def find_test_images(images_dir=IMAGES_ROOT, num_images=10):
+def find_test_images(images_dir="images_v3", num_images=10):
     images_dir = Path(images_dir)
     if not images_dir.exists():
         print(f"Verzeichnis nicht gefunden: {images_dir}")
@@ -74,15 +66,15 @@ def find_test_images(images_dir=IMAGES_ROOT, num_images=10):
 def run_analysis(num_images=10, index_types=None):
     if index_types is None:
         index_types = ["color", "sift", "dreamsim"]
-    test_images = find_test_images(IMAGES_ROOT, num_images)
+    test_images = find_test_images("images_v3", num_images)
     timer = Timer()
-    rec = MultiRecommender(timer, images_root=str(IMAGES_ROOT), db_path=DB_PATH)
+    rec = MultiRecommender(timer, images_root="images_v3", db_path="images.db")
     for index_type in index_types:
         for test_image in test_images:
             try:
                 rec.search_similar_images(str(test_image), index_type)
             except Exception as e:
-                print(f"Fehler: {e}")
+                print(f"    ❌ Fehler: {e}")
     return timer
 
 
@@ -112,7 +104,7 @@ def create_plot(timer):
 
 
 if __name__ == "__main__":
-    print("Starte Search-Runtime-Analyse")
+    print("Starting Runtime Analysis")
     NUM_IMAGES = 10
     INDEX_TYPES = ["color", "sift", "dreamsim"]
     try:
@@ -120,5 +112,5 @@ if __name__ == "__main__":
         if timer:
             create_plot(timer)
     except Exception as e:
-        print(f"Unerwarteter Fehler während Analyse: {e}")
+        print(f"Error during analysis: {e}")
         traceback.print_exc()
