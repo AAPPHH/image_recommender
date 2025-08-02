@@ -45,7 +45,7 @@ class MultiRecommender(ImageRecommender):
             return self._fetch_results(indices, distances, offset_table)
 
 
-def find_test_images(images_dir="images_v3", num_images=10):
+def find_test_images(images_dir="image_data", num_images=10):
     images_dir = Path(images_dir)
     if not images_dir.exists():
         print(f"Verzeichnis nicht gefunden: {images_dir}")
@@ -66,15 +66,15 @@ def find_test_images(images_dir="images_v3", num_images=10):
 def run_analysis(num_images=10, index_types=None):
     if index_types is None:
         index_types = ["color", "sift", "dreamsim"]
-    test_images = find_test_images("images_v3", num_images)
+    test_images = find_test_images("image_data", num_images)
     timer = Timer()
-    rec = MultiRecommender(timer, images_root="images_v3", db_path="images.db")
+    rec = MultiRecommender(timer, images_root="image_data", db_path="images.db")
     for index_type in index_types:
         for test_image in test_images:
             try:
                 rec.search_similar_images(str(test_image), index_type)
             except Exception as e:
-                print(f"    ❌ Fehler: {e}")
+                print(f"Fehler: {e}")
     return timer
 
 

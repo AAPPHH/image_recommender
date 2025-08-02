@@ -5,13 +5,18 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from contextlib import contextmanager
 import traceback
+import sys
+
+base_dir = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(base_dir))
+sys.path.insert(0, str(base_dir / "vector_scripts"))
 
 from vector_scripts.create_color_vector import ColorVectorIndexer
 from vector_scripts.create_sift_vector import SIFTVLADVectorIndexer
 from vector_scripts.create_dreamsim_vector import DreamSimVectorIndexer
 
-BASE_DIR = Path("images_v3")
-DB_PATH = "images.db"
+DB_PATH = str(base_dir / "images.db")
+BASE_DIR = base_dir / "image_data"
 
 
 class Timer:
@@ -52,9 +57,9 @@ def run_feature_extraction(test_images, index_types=None):
 
     timer = Timer()
     indexers = {
-        "color": ColorVectorIndexer(db_path=DB_PATH, base_dir="."),
-        "sift": SIFTVLADVectorIndexer(db_path=DB_PATH, base_dir="."),
-        "dreamsim": DreamSimVectorIndexer(db_path=DB_PATH, base_dir="."),
+        "color": ColorVectorIndexer(db_path=DB_PATH, base_dir=str(BASE_DIR)),
+        "sift": SIFTVLADVectorIndexer(db_path=DB_PATH, base_dir=str(BASE_DIR)),
+        "dreamsim": DreamSimVectorIndexer(db_path=DB_PATH, base_dir=str(BASE_DIR)),
     }
 
     for index_type in index_types:
@@ -100,7 +105,7 @@ def create_plot(timer):
 if __name__ == "__main__":
     NUM_IMAGES = 10
     INDEX_TYPES = ["color", "sift", "dreamsim"]
-    print("⏱️ Starte Feature-Runtime-Analyse")
+    print("Starte Feature-Runtime-Analyse")
 
     try:
         test_images = find_test_images(BASE_DIR, NUM_IMAGES)
