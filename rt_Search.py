@@ -29,6 +29,9 @@ class MultiRecommender(ImageRecommender):
         super().__init__(*args, **kwargs)
 
     def search_similar_images(self, query_path, index_type="color"):
+        """
+        Sucht nach ähnlichen Bildern basierend auf dem Abfragebild und dem Index-Typ.
+        """
         with self.timer.measure(f"Total ({index_type})"):
             path_rel = str(Path(query_path).resolve().relative_to(self.images_root))
             ordered = self._get_ordered_index_types(index_type)
@@ -46,6 +49,9 @@ class MultiRecommender(ImageRecommender):
 
 
 def find_test_images(images_dir="image_data", num_images=10):
+    """
+    Findet Testbilder im angegebenen Verzeichnis.
+    """
     images_dir = Path(images_dir)
     if not images_dir.exists():
         print(f"Verzeichnis nicht gefunden: {images_dir}")
@@ -64,6 +70,10 @@ def find_test_images(images_dir="image_data", num_images=10):
 
 
 def run_analysis(num_images=10, index_types=None):
+    """ 
+    Führt die Analyse der Feature-Extraktion für die angegebenen Index-Typen durch. 
+    """
+    if not os.path.exists("images.db"):
     if index_types is None:
         index_types = ["color", "sift", "dreamsim"]
     test_images = find_test_images("image_data", num_images)
@@ -79,6 +89,9 @@ def run_analysis(num_images=10, index_types=None):
 
 
 def create_plot(timer):
+    """ 
+    Erstellt ein Balkendiagramm der durchschnittlichen Extraktionszeiten pro Index-Typ.
+    """
     totals = {op[7:-1]: np.mean(times) for op, times in timer.times.items()
               if op.startswith('Total (') and op.endswith(')')}
     cumulative_total = sum(totals.values())

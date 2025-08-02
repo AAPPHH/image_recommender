@@ -15,6 +15,9 @@ from dash import dcc, html, Input, Output
 BASE_URL = "http://localhost:8000/image_data"
 
 def load_vectors(table_name, vector_col, db_path="images.db", limit=1000):
+    """
+    Lädt Vektoren aus der angegebenen Tabelle und Spalte der SQLite-Datenbank.
+    """
     print(f"Lade bis zu {limit} Vektoren aus Tabelle '{table_name}' …")
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -42,6 +45,9 @@ def load_vectors(table_name, vector_col, db_path="images.db", limit=1000):
     return image_paths, np.array(features)
 
 def encode_image_as_url(image_path):
+    """
+    Generiert einen HTML-Code-Snippet für die Anzeige eines Bildes.
+    """
     return f"""
         <div style='text-align:center;'>
             <img src="{BASE_URL}/{image_path}" 
@@ -51,11 +57,17 @@ def encode_image_as_url(image_path):
     """
 
 def reduce_with_umap(features, n_neighbors=15, min_dist=0.1):
+    """
+    Reduziert die Dimensionalität der Merkmale mit UMAP.
+    """
     print("UMAP-Reduktion in 3D …")
     reducer = umap.UMAP(n_components=3, n_neighbors=n_neighbors, min_dist=min_dist)
     return reducer.fit_transform(features)
 
 def assign_clusters_hdbscan(features, min_cluster_size=10):
+    """
+    Führt HDBSCAN-Clustering auf den gegebenen Merkmalen durch.
+    """
     print(f"HDBSCAN-Clustering mit min_cluster_size={min_cluster_size} …")
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size)
     return clusterer.fit_predict(features)
@@ -68,6 +80,9 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT_DIR), **kwargs)
 
 def start_file_server():
+    """
+    Startet einen einfachen HTTP-Server, um Bilder anzuzeigen.
+    """
     print(f"Starte Datei-Server unter http://localhost:{PORT}")
     print(f"Root-Verzeichnis: {ROOT_DIR}")
     threading.Thread(
@@ -83,6 +98,9 @@ app.title = "DreamSim mit Hover-Bildanzeige"
     Input("umap-graph", "hoverData")
 )
 def show_image(hoverData):
+    """
+    Zeigt ein Bild an, wenn über einen Punkt im UMAP-Graphen gehovt wird.
+    """
     if hoverData and "points" in hoverData:
         path = hoverData["points"][0]["customdata"]
         return html.Img(src=f"{BASE_URL}/{path}", style={"height": "200px", "border": "1px solid #ccc"})

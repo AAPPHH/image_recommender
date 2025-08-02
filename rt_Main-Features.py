@@ -34,6 +34,9 @@ class Timer:
 
 
 def find_test_images(images_dir=BASE_DIR, num_images=10):
+    """
+    Findet Testbilder im angegebenen Verzeichnis.
+    """
     images_dir = Path(images_dir)
     if not images_dir.exists():
         print(f"Verzeichnis nicht gefunden: {images_dir}")
@@ -52,6 +55,9 @@ def find_test_images(images_dir=BASE_DIR, num_images=10):
 
 
 def run_feature_extraction(test_images, index_types=None):
+    """ 
+    Führt die Feature-Extraktion für die angegebenen Index-Typen durch.
+    """
     if index_types is None:
         index_types = ["color", "sift", "dreamsim"]
 
@@ -77,6 +83,9 @@ def run_feature_extraction(test_images, index_types=None):
 
 
 def create_plot(timer):
+    """ 
+    Erstellt ein Balkendiagramm der durchschnittlichen Extraktionszeiten pro Index-Typ.
+    """
     totals = {op[7:-1]: np.mean(times) for op, times in timer.times.items()
               if op.startswith('Total (') and op.endswith(')')}
     sorted_totals = sorted(totals.items(), key=lambda x: x[1])
