@@ -16,7 +16,7 @@ from search_from_image import ImageRecommender
 
 # Konstanten
 DB_PATH = str(base_dir / "images.db")
-IMAGES_DIR = base_dir / "images_v3"
+IMAGES_DIR = base_dir / "image_data"
 
 
 class TestVectorIndexers(unittest.TestCase):
@@ -88,7 +88,7 @@ class TestVectorIndexers(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.conn.close()
-        print("\n🧪 Test-Ergebnisse:")
+        print("\nTest-Ergebnisse:")
         for name in ["color", "sift", "dreamsim"]:
             if name in cls.passed_tests:
                 print(f"{name} indexing erfolgreich")
