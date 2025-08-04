@@ -6,6 +6,7 @@
 *.pkl
 *.log
 images_v3/
+image_data/
 models/
 __pycache__/
 *.pyc
