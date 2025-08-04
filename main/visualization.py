@@ -194,7 +194,7 @@ if __name__ == "__main__":
 
     start_file_server()
     webbrowser.open("http://127.0.0.1:8050")
-    app.run(debug=True)
+    app.run(debug=False)
 
     fig.write_html("umap_output.html", include_plotlyjs="cdn")
     print("HTML-Datei gespeichert: umap_output.html")
