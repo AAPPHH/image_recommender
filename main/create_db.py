@@ -29,7 +29,10 @@ class ImageDBCreator:
 
     def _connect(self):
         """
-        Opens a SQLite connection with PRAGMA parameters via URI.
+        Opens a SQLite connection using URI syntax and applies PRAGMA optimizations.
+
+        Returns:
+            sqlite3.Connection: Configured connection to the database.
         """
         mode = "rwc"
         uri = (
@@ -45,7 +48,11 @@ class ImageDBCreator:
 
     def create_tables(self):
         """
-        Creates 'images' table and separate vector tables for each vector type.
+        Creates necessary tables in the database if they do not already exist:
+
+        - `images`: Stores unique relative image paths.
+        - `color_vectors`, `sift_vectors`, `dreamsim_vectors`: 
+        One table per embedding type, linked via foreign keys to `images`.
         """
         with self._connect() as conn:
             c = conn.cursor()
@@ -80,7 +87,12 @@ class ImageDBCreator:
 
     def _batch_generator(self):
         """
-        Yields batches of relative image paths in self.base_folder as POSIX (/) strings.
+        Generator that yields batches of relative image paths in POSIX format.
+
+        Only files with the extensions `.jpg`, `.jpeg`, `.png` are considered.
+
+        Yields:
+            List[str]: A batch of relative file paths.
         """
         exts = (".jpg", ".jpeg", ".png")
         base = Path(self.base_folder)
@@ -96,6 +108,13 @@ class ImageDBCreator:
 
 
     def process_batches(self): 
+        """
+        Main method to create tables and insert all image file paths into the `images` table in batches.
+
+        For each batch:
+            - Calls `INSERT OR IGNORE` to avoid duplicates.
+            - Commits changes to the database after each batch.
+        """
         self.create_tables()
 
         with self._connect() as conn:
@@ -113,6 +132,13 @@ class ImageDBCreator:
 
 
 if __name__ == "__main__":
+    """
+    CLI entry point: Initializes the ImageDBCreator with default paths and runs the batch processing.
+
+    - Base folder: 'images_v3'
+    - Database path: 'images.db'
+    - Batch size: 10_000
+    """
     BASE_FOLDER = "images_v3"
     DB_PATH = "images.db"
 

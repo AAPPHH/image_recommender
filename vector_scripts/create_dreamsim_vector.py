@@ -4,9 +4,9 @@ import torch
 from dreamsim import dreamsim
 
 try:
-    from creat_vector_base import BaseVectorIndexer, load_image
+    from vector_scripts.create_vector_base import BaseVectorIndexer, load_image
 except ImportError:
-    from vector_scripts.creat_vector_base import BaseVectorIndexer, load_image
+    from vector_scripts.create_vector_base import BaseVectorIndexer, load_image
 
 class DreamSimVectorIndexer(BaseVectorIndexer):
     table_name = "dreamsim_vectors"             # NEU: Deine Tabelle!
@@ -29,6 +29,12 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
         self._setup_model()
 
     def _setup_model(self):
+        """
+        Loads and prepares the DreamSim model on the selected device.
+
+        Initializes the model, sets it to eval mode, and performs a dummy
+        forward pass to determine output dimensionality.
+        """
         self.model, self.preprocess = dreamsim(
             pretrained=True,
             device=self.device,
@@ -43,6 +49,17 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
         self._log_and_print("DreamSim model loaded and warmed up.", level="info")
 
     def _batch_image_to_vector(self, image_paths: list[str]) -> tuple[torch.Tensor, list[str]]:
+        """
+        Converts a list of image paths into a batch of DreamSim embeddings.
+
+        Args:
+            image_paths (list[str]): List of relative image paths.
+
+        Returns:
+            tuple:
+                - torch.Tensor: Embedding tensor of shape (N, D).
+                - list[str]: List of image paths that were successfully processed.
+        """
         images = []
         valid_paths = []
         for rel_path in image_paths:
@@ -79,7 +96,12 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
     def compute_vectors(self, paths: list[str]) -> list[np.ndarray | None]:
         """
         Computes a DreamSim embedding for each image path.
-        Returns list of float32 numpy arrays (or None if image failed).
+
+        Args:
+            paths (List[str]): List of relative image paths.
+
+        Returns:
+            List[np.ndarray | None]: List of float32 arrays (or None if processing failed).
         """
         results: list[np.ndarray | None] = [None] * len(paths)
         total_batches = (len(paths) + self.model_batch - 1) // self.model_batch
@@ -103,6 +125,9 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
         return results
 
 if __name__ == "__main__":
+    """
+    CLI entry point to run DreamSim vector indexing on all images in the database.
+    """
     db_path = "images.db"
     base_dir = Path().cwd()
 

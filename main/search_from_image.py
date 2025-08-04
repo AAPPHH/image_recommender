@@ -9,12 +9,12 @@ import faiss
 from pathlib import Path
 import seaborn as sns
 import matplotlib.pyplot as plt
-from vector_scripts.creat_vector_base import load_image
+from vector_scripts.create_vector_base import load_image
 
 class ImageRecommender:
     def __init__(
         self,
-        images_root="images_v3",
+        images_root="image_data",
         db_path="images.db",
         use_gpu=True,
         sift_codebook_path="sift_codebook.npy",
@@ -45,6 +45,17 @@ class ImageRecommender:
         )
 
     def _get_db_vector(self, path_rel: str, vector_table: str, vector_column: str) -> np.ndarray:
+        """
+        Retrieves a stored vector from the SQLite database for a given image path.
+
+        Args:
+            path_rel (str): Relative image path under the base directory.
+            vector_table (str): Name of the feature table (e.g. 'color_vectors').
+            vector_column (str): Column name storing the vector blob.
+
+        Returns:
+            np.ndarray or None: Deserialized feature vector if available.
+        """
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         cur.execute("SELECT id FROM images WHERE path = ?", (path_rel,))
@@ -78,6 +89,20 @@ class ImageRecommender:
         return None
 
     def get_or_compute_vector(self, path_rel: str, vector_table: str, vector_column: str, compute_func, reshape: tuple = None, print_vectors: bool = True) -> np.ndarray | None:
+        """
+        Retrieves a vector from the database if available, otherwise computes it using a provided function.
+
+        Args:
+            path_rel (str): Relative path to the image.
+            vector_table (str): Table name to query.
+            vector_column (str): Column name for the feature blob.
+            compute_func (Callable): Function to compute the vector if not cached.
+            reshape (tuple, optional): Optional shape to reshape computed vector.
+            print_vectors (bool): Whether to print the loaded or computed vector.
+
+        Returns:
+            np.ndarray or None: Feature vector or None if computation fails.
+        """
         print(f"🔍 Suche Vektor '{vector_column}' für '{path_rel}' in DB...")
         cached = self._get_db_vector(path_rel, vector_table, vector_column)
         if cached is not None:
@@ -97,6 +122,15 @@ class ImageRecommender:
         return vec
 
     def extract_color_features(self, path_rel: str) -> np.ndarray:
+        """
+        Loads or computes the color histogram vector for the given image.
+
+        Args:
+            path_rel (str): Relative path to the image.
+
+        Returns:
+            np.ndarray: Color feature vector.
+        """
         from vector_scripts.create_color_vector import ColorVectorIndexer
         def compute():
             indexer = ColorVectorIndexer(
@@ -116,6 +150,18 @@ class ImageRecommender:
         )
 
     def extract_sift_vlad_features(self, path_rel: str) -> np.ndarray:
+        """
+        Loads or computes the SIFT-VLAD descriptor vector for the given image.
+
+        Uses a pre-trained visual vocabulary and PCA projection to compress
+        dense SIFT features into a compact VLAD vector.
+
+        Args:
+            path_rel (str): Relative path to the image.
+
+        Returns:
+            np.ndarray: SIFT-VLAD feature vector.
+        """
         from vector_scripts.create_sift_vector import SIFTVLADVectorIndexer
         def compute():
             indexer = SIFTVLADVectorIndexer(
@@ -133,6 +179,18 @@ class ImageRecommender:
         )
 
     def extract_dreamsim_features(self, path_rel: str) -> np.ndarray:
+        """
+        Loads or computes the DreamSim embedding for the given image.
+
+        DreamSim embeddings are derived from a CLIP-based neural network
+        that captures high-level visual semantics for similarity comparison.
+
+        Args:
+            path_rel (str): Relative path to the image.
+
+        Returns:
+            np.ndarray: DreamSim feature vector.
+        """
         from vector_scripts.create_dreamsim_vector import DreamSimVectorIndexer
         def compute():
             if not hasattr(self, "_dreamsim_indexer"):
@@ -156,6 +214,16 @@ class ImageRecommender:
 
     # ----------- Main Search Method ----------- #
     def search_similar_images(self, query_image_path: str, index_type: str = "color"):
+        """
+        Runs a similarity search for a query image and displays the top results.
+
+        Args:
+            query_image_path (str): Absolute path to the query image.
+            index_type (str): One or more comma-separated index types (e.g. "color,sift").
+
+        Side Effects:
+            - Displays a matplotlib plot with top-K matching images and distances.
+        """
         path_rel = str(Path(query_image_path).resolve().relative_to(self.images_root))
         ordered = self._get_ordered_index_types(index_type)
         if not ordered:
@@ -175,6 +243,15 @@ class ImageRecommender:
         self._plot_results(query_image_path, results)
 
     def _get_ordered_index_types(self, index_type: str):
+        """
+        Validates and orders the requested index types.
+
+        Args:
+            index_type (str): Comma-separated string of feature types.
+
+        Returns:
+            List[str]: Valid feature types in canonical order.
+        """
         requested = [x.strip() for x in index_type.lower().split(",")]
         valid = ["color", "hog", "lpips", "dreamsim", "sift", "color_sift", "sift_dreamsim"]
         ordered = [v for v in valid if v in requested]
@@ -185,6 +262,16 @@ class ImageRecommender:
         return ordered
 
     def _extract_query_vector(self, path_rel, ordered):
+        """
+        Combines individual feature vectors into a query vector.
+
+        Args:
+            path_rel (str): Relative path to the query image.
+            ordered (List[str]): List of feature types to extract.
+
+        Returns:
+            np.ndarray or None: Concatenated query vector.
+        """
         parts = []
         for vec_type in ordered:
             if vec_type == "color":
@@ -206,6 +293,15 @@ class ImageRecommender:
         return query_vec
 
     def _load_faiss_index(self, canonical):
+        """
+        Loads a FAISS index and its corresponding offset table.
+
+        Args:
+            canonical (str): Canonical name representing the feature combination.
+
+        Returns:
+            Tuple[faiss.Index, str]: Loaded index object and offset table name.
+        """
         index_file = f"index_hnsw_{canonical}.faiss"
         offset_table = f"faiss_index_offsets_{canonical}"
         try:
@@ -217,6 +313,17 @@ class ImageRecommender:
             return None, None
 
     def _fetch_results(self, indices, distances, offset_table):
+        """
+        Maps FAISS index search results back to image paths using offset mapping.
+
+        Args:
+            indices (np.ndarray): Indices returned from FAISS search.
+            distances (np.ndarray): Corresponding distances from FAISS search.
+            offset_table (str): Table storing image_id-to-index offset mapping.
+
+        Returns:
+            List[Tuple[Path, float]]: List of (image path, distance) pairs.
+        """
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         results = []
@@ -234,13 +341,23 @@ class ImageRecommender:
             if not fp_row:
                 logging.warning(f"Kein Pfad für id={img_id}")
                 continue
-            full_path = os.path.join(self.base_dir, "images_v3", fp_row[0])
+            full_path = Path(self.base_dir) / "images_v3", fp_row[0]
             results.append((full_path, float(distances[0, rank])))
         conn.close()
         results.sort(key=lambda x: x[1])
         return results
 
     def _plot_results(self, query_image_path, results):
+        """
+        Displays a query image alongside the retrieved similar images.
+
+        Args:
+            query_image_path (str): Path to the query image.
+            results (List[Tuple[Path, float]]): List of paths and distances to similar images.
+
+        Side Effects:
+            - Shows a matplotlib figure with the query and result images.
+        """
         sns.set_theme(style="whitegrid")
         max_per_row = 3
         total_images = len(results) + 1
@@ -267,6 +384,9 @@ class ImageRecommender:
         plt.show()
 
 if __name__ == "__main__":
+    """
+    Example usage: Load the recommender and search for images similar to a given file.
+    """
     query_image = (
         r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\weather_image_recognition\rainbow\0594.jpg"
     )

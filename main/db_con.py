@@ -3,6 +3,17 @@ import pickle
 import numpy as np
 
 def get_random_sift_vectors(db_path, num_samples=10):
+    """
+    Retrieves a random sample of SIFT vectors from the database.
+
+    Args:
+        db_path (str): Path to the SQLite database.
+        num_samples (int): Number of random vectors to retrieve.
+
+    Returns:
+        List[Tuple[str, np.ndarray or None]]: A list of (image path, vector) pairs.
+            If a vector fails to load, its value will be None.
+    """
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute("""

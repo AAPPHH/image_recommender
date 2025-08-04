@@ -17,9 +17,9 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 try:
-    from creat_vector_base import BaseVectorIndexer, load_image
+    from vector_scripts.create_vector_base import BaseVectorIndexer, load_image
 except ImportError:
-    from vector_scripts.creat_vector_base import BaseVectorIndexer, load_image
+    from vector_scripts.create_vector_base import BaseVectorIndexer, load_image
 
 class SIFTVLADVectorIndexer(BaseVectorIndexer):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -76,6 +76,18 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     @staticmethod
     def isometry_loss_corr_from_dists(D_x, D_z, sample_k=None, eps=1e-8):
+        """
+        Computes the isometric loss as (1 - Pearson correlation) between two distance matrices.
+
+        Args:
+            D_x (torch.Tensor): Pairwise distance matrix in original space.
+            D_z (torch.Tensor): Pairwise distance matrix in latent space.
+            sample_k (int, optional): Subsample size for efficient approximation.
+            eps (float): Small constant to avoid division by zero.
+
+        Returns:
+            torch.Tensor: Scalar isometry loss.
+        """
         if sample_k is not None and sample_k < D_x.size(0):
             idx = torch.randperm(D_x.size(0), device=D_x.device)[:sample_k]
             D_x = D_x[idx][:, idx]
@@ -93,6 +105,17 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     @staticmethod
     def umap_loss_from_dists(D_x, D_z, temperature=1.5):
+        """
+        Computes a UMAP-inspired loss via KL divergence between distance-based similarities.
+
+        Args:
+            D_x (torch.Tensor): Original space distance matrix.
+            D_z (torch.Tensor): Latent space distance matrix.
+            temperature (float): Softmax temperature scaling.
+
+        Returns:
+            torch.Tensor: KL divergence loss.
+        """
         probs_x = torch.softmax(-D_x / temperature, dim=1)
         probs_z = torch.softmax(-D_z / temperature, dim=1)
         return F.kl_div(probs_z.log(), probs_x, reduction="batchmean")
@@ -100,8 +123,22 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     @classmethod
     def random_sample_paths_batch_generator(
+        
         cls, images_dir, sample_size=50_000, batch_size=512, img_formats=(".jpg", ".jpeg", ".png"), n_repeats=1
     ):
+        """
+        Yields batches of relative image paths from a directory, shuffled and optionally repeated.
+
+        Args:
+            images_dir (Path or str): Directory to sample images from.
+            sample_size (int): Number of unique images to sample.
+            batch_size (int): Size of each batch yielded.
+            img_formats (tuple): Accepted image file extensions.
+            n_repeats (int): Number of times to repeat the entire sample set.
+
+        Yields:
+            List[Path]: A batch of image paths.
+        """
         images_dir = Path(images_dir)
         all_paths = []
         seen = set()
@@ -122,10 +159,23 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     @classmethod
     def load_or_create_codebook(cls, images_dir="images_v3", n_clusters=256, sample_limit=5_120_000, sample_size=1_000_000, batch_size=512):
+        """
+        Loads an existing visual vocabulary (codebook) or creates a new one using KMeans over SIFT descriptors.
+
+        Args:
+            images_dir (str or Path): Directory containing image data.
+            n_clusters (int): Number of visual words (KMeans clusters).
+            sample_limit (int): Max number of SIFT descriptors to use.
+            sample_size (int): Max number of images to sample.
+            batch_size (int): Images per batch for feature extraction.
+
+        Returns:
+            np.ndarray: Centroid matrix of shape (n_clusters, descriptor_dim).
+        """
         if cls.codebook is not None:
             return cls.codebook
 
-        if os.path.exists(cls.codebook_path):
+        if Path(cls.codebook_path).exists():
             cls.codebook = np.load(cls.codebook_path)
             cls.n_clusters = cls.codebook.shape[0]
             print(f"✅ Codebook loaded from {cls.codebook_path}")
@@ -181,6 +231,15 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     @staticmethod
     def _sift_descriptors_worker(args):
+        """
+        Worker method to extract dense, normalized SIFT descriptors from one image.
+
+        Args:
+            args (tuple): (img_path, img_size)
+
+        Returns:
+            np.ndarray or None: Array of descriptors or None if failed.
+        """
         img_path, sift_img_size = args
         img = load_image(img_path, img_size=sift_img_size, use_cv2=True, gray=True, normalize=True, antialias=True)
         if img is None:
@@ -202,8 +261,20 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         efConstruction=200, 
         efSearch=128
     ):
+        """
+        Loads or constructs an HNSW index for fast assignment of SIFT descriptors.
+
+        Args:
+            index_path (str): Path to save/load the index.
+            hnsw_m (int): Number of HNSW neighbors.
+            efConstruction (int): Construction time search depth.
+            efSearch (int): Runtime search depth.
+
+        Returns:
+            faiss.IndexHNSWFlat: Loaded or created FAISS index.
+        """
         dim = self.codebook.shape[1]
-        if not os.path.exists(index_path):
+        if not Path(index_path).exists():
             print("Baue HNSW-Index ...")
             index = faiss.IndexHNSWFlat(dim, hnsw_m)
             index.hnsw.efConstruction = efConstruction
@@ -219,23 +290,40 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     @classmethod
     def _worker_init(cls, shm_name, codebook_shape, codebook_dtype):
+        """
+        Initializes worker processes with shared memory and SIFT+FAISS objects.
+
+        Args:
+            shm_name (str): Shared memory block name.
+            codebook_shape (tuple): Shape of the SIFT codebook.
+            codebook_dtype (dtype): Data type of the codebook.
+        """
         cls._worker_shm = shared_memory.SharedMemory(name=shm_name)
         cls._worker_codebook = np.ndarray(codebook_shape, dtype=codebook_dtype, buffer=cls._worker_shm.buf)
 
         index_path = "hnsw.idx"
-        if not os.path.exists(index_path):
+        if not Path(index_path).exists():
             raise RuntimeError(f"Index-Datei {index_path} nicht gefunden! Bitte vorher bauen.")
         cls._worker_index = faiss.read_index(index_path)
         cls._worker_sift = cv2.SIFT_create(nfeatures=1000)
 
     @classmethod
     def _worker_finalize(cls):
+        """
+        Finalizes a worker process and cleans up its shared memory.
+        """
         if cls._worker_shm is not None:
             cls._worker_shm.close()
             cls._worker_shm = None
 
     @staticmethod
     def _clean_up_shm(shm):
+        """
+        Safely closes and unlinks shared memory.
+
+        Args:
+            shm (SharedMemory): SharedMemory object to clean up.
+        """
         try:
             shm.close()
             shm.unlink()
@@ -243,8 +331,17 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             pass
 
     def load_train_encoder_on_sample(self, sample_size=500_000, batch_size=None, latent_dim=None, epochs=25):
+        """
+        Worker function to compute the VLAD vector for a single image.
+
+        Args:
+            args (tuple): (index, relative_path, images_dir, image_size)
+
+        Returns:
+            tuple: (index, np.ndarray or None) — index and computed VLAD vector.
+        """
         encoder_path = "sift_vlad_encoder.pt"
-        if os.path.exists(encoder_path):
+        if Path(encoder_path).exists():
             input_dim = self.n_clusters * self.descriptor_dim
             model = self.SIFTVLADEncoder(input_dim, latent_dim).to(self.device)
             model.load_state_dict(torch.load(encoder_path, map_location=self.device))
@@ -318,6 +415,20 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     @classmethod
     def _compute_sift_vlad_worker(cls, args):
+        """
+        Computes a VLAD vector from SIFT descriptors for a single image.
+
+        Args:
+            args (tuple): A tuple containing:
+                - idx (int): Index of the image in the batch.
+                - rel_path (Path): Relative path to the image.
+                - images_dir (Path): Root directory of the image dataset.
+                - img_size (tuple): Target size for SIFT preprocessing.
+
+        Returns:
+            tuple: A tuple (idx, np.ndarray), where idx is the image index and the array
+                   is the computed VLAD vector. If no descriptors are found, a zero vector is returned.
+        """
         idx, rel_path, images_dir, img_size = args
 
         img_path = images_dir / rel_path
@@ -358,6 +469,16 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         return (idx, vlad)
 
     def compute_vectors(self, paths: list[str]):
+        """
+        Computes SIFT-VLAD vectors for a batch of image paths, optionally compressing
+        them with a trained encoder.
+
+        Args:
+            paths (List[str]): List of relative image paths.
+
+        Returns:
+            List[np.ndarray]: List of (optionally encoded) vectors.
+        """
         codebook_f32 = np.ascontiguousarray(self.codebook.astype(np.float32))
         shm = shared_memory.SharedMemory(create=True, size=codebook_f32.nbytes)
         shm_buf = np.ndarray(codebook_f32.shape, dtype=codebook_f32.dtype, buffer=shm.buf)
@@ -405,6 +526,14 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         batch_gen = self.random_sample_paths_batch_generator(
             self.images_dir, sample_size=n_samples, batch_size=batch_size
         )
+        """
+        Exports SIFT-VLAD (or encoded) vectors to an HDF5 file.
+
+        Args:
+            out_path (str): Destination file path.
+            n_samples (int): Number of vectors to write.
+            batch_size (int): Number of images per batch.
+        """
         n_done = 0
         first_vec = None
         for batch in batch_gen:

@@ -1,22 +1,38 @@
-import sqlite3
+from pathlib import Path
 import pickle
-import numpy as np
-import umap
-import hdbscan
+import sqlite3
 import threading
 import socketserver
 import http.server
 import webbrowser
-from pathlib import Path
+
+import numpy as np
+import umap
+import hdbscan
 import plotly.graph_objects as go
 import dash
 from dash import dcc, html, Input, Output
 
 BASE_URL = "http://localhost:8000"
+PORT = 8000
+ROOT_DIR = Path(__file__).resolve().parent.parent
+LIMIT = 1_000_000
+TABLE_NAME = "dreamsim_vectors"
+VECTOR_COLUMN = "dreamsim_vector_blob"
+MIN_CLUSTER_SIZE = 10
 
 def load_vectors(table_name, vector_col, db_path="images.db", limit=1000):
     """
-    Lädt Vektoren aus der angegebenen Tabelle und Spalte der SQLite-Datenbank.
+    Loads image paths and feature vectors from a SQLite database.
+
+    Args:
+        table_name (str): Name of the vector table to join with the images table.
+        vector_col (str): Name of the BLOB column containing the pickled vectors.
+        db_path (str, optional): Path to the SQLite database. Defaults to "images.db".
+        limit (int, optional): Maximum number of vectors to load. Defaults to 1000.
+
+    Returns:
+        Tuple[List[Path], np.ndarray]: A list of image paths and a NumPy array of corresponding feature vectors.
     """
     db_path = Path(db_path)
     print(f"Lade bis zu {limit} Vektoren aus Tabelle '{table_name}' …")
@@ -48,7 +64,16 @@ def load_vectors(table_name, vector_col, db_path="images.db", limit=1000):
 
 def encode_image_as_url(image_path: Path):
     """
-    Generiert einen HTML-Code-Snippet für die Anzeige eines Bildes.
+    Loads image paths and feature vectors from a SQLite database.
+
+    Args:
+        table_name (str): Name of the vector table to join with the images table.
+        vector_col (str): Name of the BLOB column containing the pickled vectors.
+        db_path (str, optional): Path to the SQLite database. Defaults to "images.db".
+        limit (int, optional): Maximum number of vectors to load. Defaults to 1000.
+
+    Returns:
+        Tuple[List[Path], np.ndarray]: A list of image paths and a NumPy array of corresponding feature vectors.
     """
     return f"""
         <div style='text-align:center;'>
@@ -60,7 +85,15 @@ def encode_image_as_url(image_path: Path):
 
 def reduce_with_umap(features, n_neighbors=15, min_dist=0.1):
     """
-    Reduziert die Dimensionalität der Merkmale mit UMAP.
+    Reduces the dimensionality of feature vectors using UMAP.
+
+    Args:
+        features (np.ndarray): High-dimensional feature vectors.
+        n_neighbors (int, optional): Local neighborhood size used for manifold approximation. Defaults to 15.
+        min_dist (float, optional): Minimum distance between points in the low-dimensional space. Defaults to 0.1.
+
+    Returns:
+        np.ndarray: Transformed feature vectors in 3D space.
     """
     print("UMAP-Reduktion in 3D …")
     reducer = umap.UMAP(n_components=3, n_neighbors=n_neighbors, min_dist=min_dist)
@@ -68,14 +101,18 @@ def reduce_with_umap(features, n_neighbors=15, min_dist=0.1):
 
 def assign_clusters_hdbscan(features, min_cluster_size=10):
     """
-    Führt HDBSCAN-Clustering auf den gegebenen Merkmalen durch.
+    Assigns cluster labels to feature vectors using HDBSCAN.
+
+    Args:
+        features (np.ndarray): Feature vectors (e.g., UMAP-reduced).
+        min_cluster_size (int, optional): Minimum size of clusters. Defaults to 10.
+
+    Returns:
+        np.ndarray: Cluster labels for each vector. Noise points are labeled as -1.
     """
     print(f"HDBSCAN-Clustering mit min_cluster_size={min_cluster_size} …")
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size)
     return clusterer.fit_predict(features)
-
-PORT = 8000
-ROOT_DIR = Path(__file__).resolve().parent.parent
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -83,7 +120,10 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
 
 def start_file_server():
     """
-    Startet einen einfachen HTTP-Server, um Bilder anzuzeigen.
+    Starts a background thread running a local HTTP server to serve static image files.
+
+    Side Effects:
+        Launches a thread that serves files from ROOT_DIR on the specified PORT.
     """
     print(f"Starte Datei-Server unter http://localhost:{PORT}")
     print(f"Root-Verzeichnis: {ROOT_DIR}")
@@ -101,7 +141,13 @@ app.title = "DreamSim mit Hover-Bildanzeige"
 )
 def show_image(hoverData):
     """
-    Zeigt ein Bild an, wenn über einen Punkt im UMAP-Graphen gehovt wird.
+    Dash callback: Displays an image preview when a UMAP point is hovered over.
+
+    Args:
+        hoverData (dict): Hover event data from Dash containing the customdata path.
+
+    Returns:
+        Union[str, dash.html.Img]: HTML image tag or fallback message.
     """
     if hoverData and "points" in hoverData:
         path_str = hoverData["points"][0]["customdata"]
@@ -109,11 +155,6 @@ def show_image(hoverData):
     return "Hover über einen Punkt, um das Bild anzuzeigen."
 
 if __name__ == "__main__":
-    LIMIT = 1_000_000
-    TABLE_NAME = "dreamsim_vectors"
-    VECTOR_COLUMN = "dreamsim_vector_blob"
-    MIN_CLUSTER_SIZE = 10
-
     dream_paths, dream_vecs = load_vectors(TABLE_NAME, VECTOR_COLUMN, limit=LIMIT)
     dream_embed = reduce_with_umap(dream_vecs)
     cluster_labels = assign_clusters_hdbscan(dream_embed, min_cluster_size=MIN_CLUSTER_SIZE)

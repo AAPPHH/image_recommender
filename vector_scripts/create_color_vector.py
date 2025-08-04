@@ -1,13 +1,13 @@
-import os
 from pathlib import Path
+import os
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import cv2
 
 try:
-    from creat_vector_base import BaseVectorIndexer, load_image
+    from vector_scripts.create_vector_base import BaseVectorIndexer, load_image
 except ImportError:
-    from vector_scripts.creat_vector_base import BaseVectorIndexer, load_image
+    from vector_scripts.create_vector_base import BaseVectorIndexer, load_image
 
 class ColorVectorIndexer(BaseVectorIndexer):
     table_name = "color_vectors"
@@ -17,6 +17,19 @@ class ColorVectorIndexer(BaseVectorIndexer):
 
     @staticmethod
     def compute_color_vector_worker(args):
+        """
+        Computes a normalized color histogram vector from an image.
+
+        Args:
+            args (tuple): A tuple containing:
+                - rel_path (str or Path): Relative or absolute path to the image.
+                - images_dir (Path): Base directory containing all images.
+                - bins (int): Number of histogram bins per channel.
+                - load_image_kwargs (dict): Keyword arguments for the `load_image` function.
+
+        Returns:
+            np.ndarray or None: L2-normalized histogram vector, or None if loading fails.
+        """
         rel_path, images_dir, bins, load_image_kwargs = args
         img_path = Path(rel_path)
         if not img_path.is_absolute():
@@ -39,6 +52,16 @@ class ColorVectorIndexer(BaseVectorIndexer):
         return vec
 
     def compute_vectors(self, paths: list[str], chunksize=16):
+        """
+        Computes color histogram vectors for a batch of image paths in parallel.
+
+        Args:
+            paths (List[str]): List of relative image paths.
+            chunksize (int): Number of images to process per worker chunk.
+
+        Returns:
+            List[np.ndarray or None]: List of color vectors (or None for failed images).
+        """
         images_dir = self.base_dir / "images_v3"
         bins = self.bins
         load_image_kwargs = dict(
@@ -55,6 +78,9 @@ class ColorVectorIndexer(BaseVectorIndexer):
         return results
 
 if __name__ == "__main__":
+    """
+    CLI entry point to compute color histogram vectors and store them in the database.
+    """
     db_path = "images.db"
     base_dir = Path().cwd()
     indexer = ColorVectorIndexer(

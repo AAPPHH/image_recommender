@@ -44,6 +44,17 @@ train_idx = list(set(idx_all) - set(test_idx))
 
 # ---- Scipy-pdist Helper für große Matrizen ----
 def get_latents(model, dataloader, device):
+    """
+    Encodes all batches in a DataLoader using the given model.
+
+    Args:
+        model (nn.Module): The encoder model.
+        dataloader (DataLoader): PyTorch DataLoader for input data.
+        device (str): The device to run inference on ("cpu" or "cuda").
+
+    Returns:
+        np.ndarray: Stacked latent representations.
+    """
     model.eval()
     latents = []
     with torch.no_grad():
@@ -74,6 +85,18 @@ class Encoder(nn.Module):
         return F.normalize(self.net(x), dim=-1)
 
 def isometry_loss_corr(x, z, sample_k=None, eps=1e-8):
+    """
+    Computes 1 - Pearson correlation between pairwise distances in input and latent space.
+
+    Args:
+        x (torch.Tensor): Input batch.
+        z (torch.Tensor): Latent representation of x.
+        sample_k (int, optional): If set, randomly subsamples k entries.
+        eps (float): Small constant to prevent divide-by-zero.
+
+    Returns:
+        torch.Tensor: Scalar loss value.
+    """
     if sample_k is not None and sample_k < x.size(0):
         idx = torch.randperm(x.size(0), device=x.device)[:sample_k]
         x, z = x[idx], z[idx]
@@ -89,6 +112,17 @@ def isometry_loss_corr(x, z, sample_k=None, eps=1e-8):
     return 1 - corr
 
 def umap_loss(x, z, temperature=1.5):
+    """
+    KL divergence between softmaxed pairwise distances in input and latent space.
+
+    Args:
+        x (torch.Tensor): Input batch.
+        z (torch.Tensor): Latent representation.
+        temperature (float): Scaling factor for softmax.
+
+    Returns:
+        torch.Tensor: Scalar KL divergence loss.
+    """
     Dx = torch.cdist(x, x)
     Dz = torch.cdist(z, z)
     px = torch.softmax(-Dx / temperature, dim=1)
@@ -96,6 +130,18 @@ def umap_loss(x, z, temperature=1.5):
     return F.kl_div(pz.log(), px, reduction="batchmean")
 
 def objective(trial):
+    """
+    Optuna objective function to train an encoder and optimize architecture hyperparameters.
+
+    Args:
+        trial (optuna.trial.Trial): Optuna trial object.
+
+    Returns:
+        float: Pearson correlation between pairwise distances in input and latent space.
+
+    Raises:
+        optuna.exceptions.TrialPruned: If trial is pruned based on intermediate results.
+    """
     torch.manual_seed(42)
     np.random.seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -171,6 +217,13 @@ def objective(trial):
     return corr
 
 def print_trial_summary(study, trial):
+    """
+    Callback to print the summary of a completed trial.
+
+    Args:
+        study (optuna.study.Study): The current Optuna study.
+        trial (optuna.trial.FrozenTrial): The completed trial.
+    """
     if trial.value is not None:
         print(
             f"[Trial {trial.number}] val_corr={trial.value:.4f} | "
@@ -182,7 +235,15 @@ def print_trial_summary(study, trial):
 
 
 if __name__ == "__main__":
-    
+    """
+    Entry point for running architecture search using Optuna.
+
+    - Loads HDF5 vector dataset.
+    - Splits into train/test.
+    - Defines and optimizes encoder architecture using Hyperband pruning.
+    - Stores results in a persistent Optuna SQLite database.
+    - Prints best trial parameters and architecture.
+    """
     study_name = "my_vlad_search"  # Name frei wählbar!
     storage = "sqlite:///optuna_vlad_search.db"  # Relativer Pfad zur DB
 

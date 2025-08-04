@@ -34,6 +34,13 @@ class BaseVectorIndexer:
         signal.signal(signal.SIGINT, self._handle_sigint)
 
     def _setup_logging(self, log_file: str, log_dir: str):
+        """
+        Configures logging and creates the log directory if it doesn't exist.
+
+        Args:
+            log_file (str): Name of the log file.
+            log_dir (str): Directory to store log files.
+        """
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         full_path = Path(log_dir) / log_file
 
@@ -47,6 +54,13 @@ class BaseVectorIndexer:
         self._log_and_print(f"Logging initialized at {full_path}", level="info")
 
     def _log_and_print(self, message: str, level: str = "info"):
+        """
+        Prints a message and logs it at the specified level.
+
+        Args:
+            message (str): Message to print and log.
+            level (str): Logging level ("info", "warning", "error", etc.).
+        """
         print(message)
         lvl = level.lower()
         if lvl == "info":
@@ -59,10 +73,20 @@ class BaseVectorIndexer:
             logging.debug(message)
 
     def _handle_sigint(self, signum, frame):
+        """
+        Handles keyboard interruption (Ctrl+C) and exits gracefully.
+
+        Args:
+            signum (int): Signal number.
+            frame (frame): Current stack frame.
+        """
         self._log_and_print("⚠️ Aborted by user.", level="info")
         sys.exit(0)
 
     def _init_db(self):
+        """
+        Initializes read/write connections to the SQLite database with optimized settings.
+        """
         self.read_conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         self.read_conn.execute("PRAGMA journal_mode=WAL;")
         self.write_conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
@@ -72,6 +96,15 @@ class BaseVectorIndexer:
         self._log_and_print(f"Connected to DB: {self.db_path}", level="info")
 
     def get_pending_rows(self, last_id: int):
+        """
+        Fetches a batch of image IDs and paths that have not yet been indexed.
+
+        Args:
+            last_id (int): ID after which to fetch new rows.
+
+        Returns:
+            List[tuple[int, str]]: List of (image_id, path) tuples.
+        """
         cursor = self.read_conn.cursor()
         sql = (
             f"SELECT i.id, i.path FROM images i "
@@ -84,12 +117,24 @@ class BaseVectorIndexer:
 
     def compute_vectors(self, paths: list[str]):
         """
-        Muss von Unterklassen implementiert werden.
-        Soll für jeden Pfad einen Vektor (oder None) zurückgegeben.
+        Computes feature vectors for a list of image paths.
+        Must be implemented by subclasses.
+
+        Args:
+            paths (List[str]): List of relative image paths.
+
+        Returns:
+            List[np.ndarray or None]: One vector per image (or None on failure).
         """
         raise NotImplementedError
 
     def write_updates(self, id_vec_pairs: list[tuple[int, object]]):
+        """
+        Inserts or updates computed vectors in the database.
+
+        Args:
+            id_vec_pairs (List[tuple[int, object]]): List of (image_id, vector) tuples.
+        """
         if not id_vec_pairs:
             self._log_and_print("No vectors to write for this batch.", level="warning")
             return
@@ -117,6 +162,12 @@ class BaseVectorIndexer:
             self._log_and_print(f"❌ Write failed, rolled back: {e}", level="error")
 
     def batch_iterator(self):
+        """
+        Yields batches of (ids, paths) for images that still need to be indexed.
+
+        Yields:
+            Tuple[List[int], List[str]]: A batch of image IDs and their paths.
+        """
         last_id = 0
         while True:
             rows = self.get_pending_rows(last_id)
@@ -127,6 +178,10 @@ class BaseVectorIndexer:
             last_id = ids[-1]
 
     def run(self):
+        """
+        Starts the indexing process by iterating over all unprocessed images,
+        computing their feature vectors, and writing them to the database.
+        """
         total = self.read_conn.cursor().execute(
             f"SELECT COUNT(*) "
             f"FROM images i "
@@ -162,6 +217,20 @@ def load_image(
     antialias=True,
     use_cv2=False,
 ):
+    """
+    Loads and optionally resizes and normalizes an image from disk.
+
+    Args:
+        img_path (str or Path): Path to the image file.
+        img_size (tuple, optional): Resize target as (width, height).
+        gray (bool): Whether to convert to grayscale.
+        normalize (bool): Whether to scale pixel values to [0, 1].
+        antialias (bool): Whether to use high-quality resizing.
+        use_cv2 (bool): If True, use OpenCV instead of PIL.
+
+    Returns:
+        np.ndarray or PIL.Image.Image or None: Loaded image or None if failed.
+    """
     img_path = Path(img_path)
     if not img_path.exists():
         print(f"⚠️ Image not found: {img_path}")

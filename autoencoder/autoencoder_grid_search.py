@@ -51,6 +51,18 @@ class Encoder(nn.Module):
         return z
 
 def isometry_loss_corr(x, z, sample_k=None, eps=1e-8):
+    """
+    Computes a correlation-based isometry loss that penalizes mismatch in relative distances.
+
+    Args:
+        x (torch.Tensor): Original input vectors.
+        z (torch.Tensor): Latent representations.
+        sample_k (int, optional): If set, randomly subsamples sample_k entries for efficiency.
+        eps (float): Numerical stability epsilon.
+
+    Returns:
+        torch.Tensor: Loss value (1 - Pearson correlation coefficient).
+    """
     if sample_k is not None and sample_k < x.size(0):
         idx = torch.randperm(x.size(0), device=x.device)[:sample_k]
         x, z = x[idx], z[idx]
@@ -68,6 +80,17 @@ def isometry_loss_corr(x, z, sample_k=None, eps=1e-8):
     return 1 - corr
 
 def umap_loss(x, z, temperature=1.0):
+    """
+    Computes a KL divergence between pairwise distance softmaxes in original and latent space.
+
+    Args:
+        x (torch.Tensor): Original vectors.
+        z (torch.Tensor): Latent vectors.
+        temperature (float): Scaling factor for pairwise distances.
+
+    Returns:
+        torch.Tensor: KL divergence loss.
+    """
     D_x = torch.cdist(x, x)
     D_z = torch.cdist(z, z)
     probs_x = torch.softmax(-D_x / temperature, dim=1)
@@ -79,6 +102,26 @@ def train_encoder_corr_umap(
     lambda_corr=1.0, lambda_umap=0.1, temperature=1.0,
     epochs=30, lr=1e-3, batch_size=64, device='cpu', sample_k=64
 ):
+    """
+    Trains the encoder using a combination of isometry loss and UMAP-style KL loss.
+
+    Args:
+        X_train (np.ndarray): Training data array of shape (n_samples, input_dim).
+        input_dim (int): Input vector dimensionality.
+        latent_dim (int): Latent vector dimensionality.
+        dropout_rate (float): Dropout probability.
+        lambda_corr (float): Weight for the isometry loss.
+        lambda_umap (float): Weight for the UMAP loss.
+        temperature (float): Softmax temperature for UMAP loss.
+        epochs (int): Number of training epochs.
+        lr (float): Learning rate.
+        batch_size (int): Batch size for training.
+        device (str): Device to use ("cpu" or "cuda").
+        sample_k (int): Number of samples to use in pairwise distance calculations.
+
+    Returns:
+        Encoder: Trained encoder model in evaluation mode.
+    """
     model = Encoder(input_dim=input_dim, latent_dim=latent_dim, dropout_rate=dropout_rate).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     dataset = TensorDataset(torch.from_numpy(X_train).float())
@@ -102,6 +145,17 @@ def train_encoder_corr_umap(
     return model
 
 def neighbor_preservation(X_orig, X_lat, k=100):
+    """
+    Evaluates neighborhood preservation between original and latent spaces.
+
+    Args:
+        X_orig (np.ndarray): Original feature vectors.
+        X_lat (np.ndarray): Latent feature vectors.
+        k (int): Number of nearest neighbors to consider.
+
+    Returns:
+        float: Average overlap ratio of top-k neighbors.
+    """
     nn_orig = NearestNeighbors(n_neighbors=k+1).fit(X_orig)
     nn_lat = NearestNeighbors(n_neighbors=k+1).fit(X_lat)
     idx_orig = nn_orig.kneighbors(X_orig, return_distance=False)[:, 1:]

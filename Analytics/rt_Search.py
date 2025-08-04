@@ -1,12 +1,12 @@
-import os
 import time
 import random
 import numpy as np
 import matplotlib.pyplot as plt
-from contextlib import contextmanager
 from pathlib import Path
-from search_from_image import ImageRecommender
+from contextlib import contextmanager
 import traceback
+
+from main.search_from_image import ImageRecommender
 
 
 class Timer:
@@ -15,6 +15,15 @@ class Timer:
 
     @contextmanager
     def measure(self, operation_name):
+        """
+        Context manager to time a block of code.
+
+        Args:
+            operation_name (str): Name of the operation being measured.
+
+        Yields:
+            None
+        """
         start = time.perf_counter()
         try:
             yield
@@ -30,7 +39,14 @@ class MultiRecommender(ImageRecommender):
 
     def search_similar_images(self, query_path, index_type="color"):
         """
-        Sucht nach ähnlichen Bildern basierend auf dem Abfragebild und dem Index-Typ.
+        Searches for similar images based on the provided query image and index type.
+
+        Args:
+            query_path (str or Path): Path to the query image.
+            index_type (str): The type of vector index to use ("color", "sift", "dreamsim").
+
+        Returns:
+            List[Tuple[str, float]] or None: A list of matched image paths with distances, or None if not successful.
         """
         with self.timer.measure(f"Total ({index_type})"):
             path_rel = str(Path(query_path).resolve().relative_to(self.images_root))
@@ -50,7 +66,14 @@ class MultiRecommender(ImageRecommender):
 
 def find_test_images(images_dir="image_data", num_images=10):
     """
-    Findet Testbilder im angegebenen Verzeichnis.
+    Randomly selects a number of test images from the specified directory.
+
+    Args:
+        images_dir (str or Path): Directory containing image files.
+        num_images (int): Number of test images to sample.
+
+    Returns:
+        List[Path]: A list of selected image file paths.
     """
     images_dir = Path(images_dir)
     if not images_dir.exists():
@@ -70,27 +93,41 @@ def find_test_images(images_dir="image_data", num_images=10):
 
 
 def run_analysis(num_images=10, index_types=None):
-    """ 
-    Führt die Analyse der Feature-Extraktion für die angegebenen Index-Typen durch. 
     """
-    if not os.path.exists("images.db"):
-    if index_types is None:
-        index_types = ["color", "sift", "dreamsim"]
-    test_images = find_test_images("image_data", num_images)
-    timer = Timer()
-    rec = MultiRecommender(timer, images_root="image_data", db_path="images.db")
-    for index_type in index_types:
-        for test_image in test_images:
-            try:
-                rec.search_similar_images(str(test_image), index_type)
-            except Exception as e:
-                print(f"Fehler: {e}")
-    return timer
+    Runs a performance analysis of similarity search using different vector index types.
+
+    Args:
+        num_images (int): Number of images to test.
+        index_types (List[str], optional): Index types to include in the analysis (e.g. "color", "sift", "dreamsim").
+
+    Returns:
+        Timer: A Timer object with recorded runtimes per index type.
+    """
+    if not Path("images.db").exists():
+        if index_types is None:
+            index_types = ["color", "sift", "dreamsim"]
+        test_images = find_test_images("image_data", num_images)
+        timer = Timer()
+        rec = MultiRecommender(timer, images_root="image_data", db_path="images.db")
+        for index_type in index_types:
+            for test_image in test_images:
+                try:
+                    rec.search_similar_images(str(test_image), index_type)
+                except Exception as e:
+                    print(f"Fehler: {e}")
+        return timer
 
 
 def create_plot(timer):
-    """ 
-    Erstellt ein Balkendiagramm der durchschnittlichen Extraktionszeiten pro Index-Typ.
+    """
+    Creates a bar chart visualizing average runtime per index type and cumulative total.
+
+    Args:
+        timer (Timer): Timer instance containing operation durations.
+
+    Side Effects:
+        - Displays the runtime plot using Matplotlib.
+        - Saves the figure to 'runtime_analysis.png'.
     """
     totals = {op[7:-1]: np.mean(times) for op, times in timer.times.items()
               if op.startswith('Total (') and op.endswith(')')}
@@ -117,6 +154,14 @@ def create_plot(timer):
 
 
 if __name__ == "__main__":
+    """
+    Main execution block to run the runtime analysis.
+
+    Steps:
+        - Selects a set of test images.
+        - Runs search performance timing per index type.
+        - Visualizes the performance data in a plot.
+    """
     print("Starting Runtime Analysis")
     NUM_IMAGES = 10
     INDEX_TYPES = ["color", "sift", "dreamsim"]
