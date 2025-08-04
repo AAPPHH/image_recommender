@@ -12,14 +12,15 @@ import plotly.graph_objects as go
 import dash
 from dash import dcc, html, Input, Output
 
-BASE_URL = "http://localhost:8000/image_data"
+BASE_URL = "http://localhost:8000"
 
 def load_vectors(table_name, vector_col, db_path="images.db", limit=1000):
     """
     Lädt Vektoren aus der angegebenen Tabelle und Spalte der SQLite-Datenbank.
     """
+    db_path = Path(db_path)
     print(f"Lade bis zu {limit} Vektoren aus Tabelle '{table_name}' …")
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
 
     query = f"""
@@ -34,25 +35,26 @@ def load_vectors(table_name, vector_col, db_path="images.db", limit=1000):
 
     image_paths, features = [], []
 
-    for path, blob in rows:
+    for path_str, blob in rows:
         try:
             vec = pickle.loads(blob)
+            path = Path(path_str)
             image_paths.append(path)
             features.append(vec)
         except Exception as e:
-            print(f"Fehler bei {path}: {e}")
+            print(f"Fehler bei {path_str}: {e}")
 
     return image_paths, np.array(features)
 
-def encode_image_as_url(image_path):
+def encode_image_as_url(image_path: Path):
     """
     Generiert einen HTML-Code-Snippet für die Anzeige eines Bildes.
     """
     return f"""
         <div style='text-align:center;'>
-            <img src="{BASE_URL}/{image_path}" 
+            <img src="{BASE_URL}/{image_path.as_posix()}" 
                  style="width:120px; max-height:120px; object-fit:contain; border:1px solid #ccc;">
-            <br><span style='font-size:10px'>{image_path}</span>
+            <br><span style='font-size:10px'>{image_path.as_posix()}</span>
         </div>
     """
 
@@ -102,8 +104,8 @@ def show_image(hoverData):
     Zeigt ein Bild an, wenn über einen Punkt im UMAP-Graphen gehovt wird.
     """
     if hoverData and "points" in hoverData:
-        path = hoverData["points"][0]["customdata"]
-        return html.Img(src=f"{BASE_URL}/{path}", style={"height": "200px", "border": "1px solid #ccc"})
+        path_str = hoverData["points"][0]["customdata"]
+        return html.Img(src=f"{BASE_URL}/{path_str}", style={"height": "200px", "border": "1px solid #ccc"})
     return "Hover über einen Punkt, um das Bild anzuzeigen."
 
 if __name__ == "__main__":
@@ -126,7 +128,7 @@ if __name__ == "__main__":
             x=dream_embed[idx, 0], y=dream_embed[idx, 1], z=dream_embed[idx, 2],
             mode='markers', name=label_name,
             marker=dict(size=3, opacity=0.8, color=color),
-            customdata=[str(dream_paths[i]) for i in idx],
+            customdata=[p.as_posix() for p in (dream_paths[i] for i in idx)],
             hoverinfo='skip',
             hovertemplate="%{customdata}<extra></extra>"
         ))
@@ -152,6 +154,6 @@ if __name__ == "__main__":
     start_file_server()
     webbrowser.open("http://127.0.0.1:8050")
     app.run(debug=True)
-    
+
     fig.write_html("umap_output.html", include_plotlyjs="cdn")
     print("HTML-Datei gespeichert: umap_output.html")
