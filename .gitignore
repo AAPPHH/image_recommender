@@ -14,3 +14,4 @@ __pycache__/
 *.pt
 *.idx
 *.hdf5
+*.duckdb
