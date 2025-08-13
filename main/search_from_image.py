@@ -6,9 +6,12 @@ import pickle
 import numpy as np
 import torch
 import faiss
-from pathlib import Path
 import seaborn as sns
 import matplotlib.pyplot as plt
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from vector_scripts.create_vector_base import load_image
 
 class ImageRecommender:
@@ -388,7 +391,6 @@ if __name__ == "__main__":
     Example usage: Load the recommender and search for images similar to a given file.
     """
     query_image = (
-        r"C:\Users\jfham\OneDrive\Dokumente\Workstation_Clones\image_recomender\image_recommender\images_v3\image_data\weather_image_recognition\rainbow\0594.jpg"
-    )
+        r"image_data/coco2017_train/train2017/000000000034.jpg")
     rec = ImageRecommender()
     rec.search_similar_images(query_image, index_type="color")
