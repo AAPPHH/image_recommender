@@ -1,18 +1,23 @@
-# 🖼️ Image Recommender with Color, SIFT-VLAD, DreamSim & FAISS
+# 🖼️ Image Recommender with Color, SIFT-VLAD, DreamSim, FAISS & Interactive Visualization
 
-A high-performance image similarity search pipeline leveraging multiple embedding strategies and efficient indexing. Store image paths and embeddings in SQLite, then build a FAISS HNSW index for fast nearest-neighbor retrieval.
+A high-performance image similarity search pipeline leveraging multiple embedding strategies, efficient indexing, and modern interactive visualization.  
+Store image paths and embeddings in SQLite, build a FAISS HNSW index for fast nearest-neighbor retrieval, and explore results visually with UMAP, HDBSCAN, Plotly, and Dash.
 
 ---
 
 ## 🚀 Key Features
 
-* **Diverse Embedding Methods**: Color histograms, SIFT-VLAD descriptors, DreamSim embeddings (using a CLIP backbone)
-* **SQLite Database**: Central storage of image filepaths and embeddings in structured tables
-* **Batch Processing**: Scale effortlessly over large image collections with configurable batch sizes
-* **GPU Acceleration**: Option to leverage CUDA for DreamSim feature extraction
+* **Diverse Embedding Methods**:  
+  - Color histograms  
+  - SIFT-VLAD descriptors  
+  - DreamSim embeddings (using a CLIP backbone)  
+  
+* **SQLite Database**: Central storage for image paths and embeddings  
+* **Batch Processing**: Scale effortlessly over large image collections  
+* **GPU Acceleration**: Option to leverage CUDA for DreamSim feature extraction 
 * **FAISS HNSW Index**: Build and query an HNSW index for sub-second similarity searches
-* **Flexible Search**: Combine any subset of supported embeddings (e.g., `color`, `sift`, `dreamsim`)
-* **Built-in Visualization**: Quickly display top-K similar images using Matplotlib
+* **Interactive Visualization** with UMAP, HDBSCAN, Plotly & Dash   
+
 
 ---
 
@@ -39,7 +44,7 @@ A high-performance image similarity search pipeline leveraging multiple embeddin
 3. **Core Libraries**:
 
 ```bash
-pip install torch torchvision dreamsim faiss-cpu Pillow matplotlib opencv-python-headless joblib numpy scipy scikit-learn
+pip install dreamsim faiss-cpu joblib lpips matplotlib numpy opencv-python Pillow requests scikit-learn scipy seaborn scikit-image submitit torch torchvision tqdm umap-learn hdbscan networkx plotly dash
 ```
 
 > For GPU support with FAISS, install `faiss-gpu` instead of `faiss-cpu`.
@@ -51,7 +56,7 @@ pip install torch torchvision dreamsim faiss-cpu Pillow matplotlib opencv-python
 ### 1. Initialize the Database
 
 ```bash
-python create_db.py --base-folder images_v3 --db-path images.db
+python -m main.create_db --base-folder image_data --db-path images.db
 ```
 
 Scans the specified folder recursively and populates the database with relative image paths.
@@ -61,15 +66,16 @@ Scans the specified folder recursively and populates the database with relative 
 Run all extractors in one go:
 
 ```bash
-python ceate_main_features.py
+python -m main.create_main_features --db-path images.db --images-root image_data
 ```
 
 Or execute each step individually:
 
 ```bash
-python create_color_vector.py
-python create_sift_vector.py
-python create_dreamsim_vector.py
+python -m vector_scripts.create_color_vector     --db-path images.db --images-root image_data
+python -m vector_scripts.create_sift_vector      --db-path images.db --images-root image_data
+python -m vector_scripts.create_dreamsim_vector  --db-path images.db --images-root image_data
+
 ```
 
 Each script processes images lacking its corresponding embeddings.
@@ -77,7 +83,7 @@ Each script processes images lacking its corresponding embeddings.
 ### 3. Build the FAISS Index
 
 ```bash
-python create_index.py --vector-types color sift dreamsim --output index_hnsw.faiss
+python -m main.create_index --db-path images.db --vector-types color sift dreamsim --output index_hnsw.faiss
 ```
 
 * **`--vector-types`**: Choose any combination of `color`, `sift`, `dreamsim`.
@@ -86,7 +92,17 @@ python create_index.py --vector-types color sift dreamsim --output index_hnsw.fa
 ### 4. Search for Similar Images
 
 ```bash
-python search_from_image.py --query path/to/query.jpg --index combo_color_sift_dreamsim --top-k 5
+python -m main.search_from_image --db-path images.db --images-root image_data --query path/to/query.jpg --index combo_color_sift_dreamsim --top-k 5
+```
+
+### 5. Interactive Visualisation
+
+```bash
+python -m main.visualization \
+  --db-path images.db \
+  --images-root image_data \
+  --table dreamsim_vectors \
+  --limit 2000
 ```
 
 Displays the top-K matches with their similarity metrics.
