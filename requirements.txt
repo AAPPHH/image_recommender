@@ -1,7 +1,6 @@
 dreamsim==0.2.1
 faiss_cpu==1.10.0
 joblib==1.4.2
-lpips==0.1.4
 matplotlib==3.10.3
 numpy==2.2.6
 opencv_python==4.11.0.86
