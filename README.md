@@ -25,15 +25,33 @@ Store image paths and embeddings in SQLite, build a FAISS HNSW index for fast ne
 
 ```bash
 .
-├── create_db.py               # Scan image folders and insert relative filepaths into SQLite
-├── create_color_vector.py     # Compute and store color histogram embeddings
-├── create_sift_vector.py      # Compute and store SIFT-VLAD embeddings
-├── create_dreamsim_vector.py  # Compute and store DreamSim embeddings (with CLIP backbone)
-├── ceate_main_features.py     # Orchestrate color, SIFT-VLAD & DreamSim extraction in a single pipeline
-├── create_index.py            # Build a FAISS HNSW index over completed embeddings
-├── search_from_image.py       # Perform similarity search and display results
-└── README.md                  # Project documentation
-```
+├── main/
+│   ├── create_db.py                # Scan image folders and insert relative filepaths into SQLite
+│   ├── create_index.py             # Build a FAISS HNSW index over completed embeddings
+│   ├── create_main_features.py     # Orchestrate color, SIFT-VLAD & DreamSim extraction
+│   ├── db_con.py                   # Lightweight SQLite connection utility
+│   ├── search_from_image.py        # Perform similarity search and display results
+│   └── visualization.py            # UMAP + clustering + similarity graph rendering
+│ 
+├── vector_scripts/
+│   ├── create_color_vector.py      # Compute and store color histogram embeddings
+│   ├── create_dreamsim_vector.py   # Compute and store DreamSim embeddings (with CLIP backbone)
+│   ├── create_sift_vector.py       # Compute and store SIFT-VLAD embeddings
+│   └── create_vector_base.py       # Shared base class and utility functions
+│
+├── analytics/
+│   ├── rt_Main-Features.py         # Measure runtime of feature extraction
+│   ├── rt_Search.py                # Measure runtime of image search
+│   └── test_vector_indexers.py     # Unit tests for indexing and retrieval pipelines
+│
+├── autoencoder/
+│   ├── autoencoder_grid_search.py  # Grid search for compression model tuning
+│   ├── encoder_optu_tuner.py       # Optuna tuner for autoencoder hyperparameters
+│   └── encoder_test.py             # Test autoencoder-based compression performance
+│
+├── README.md                       # Project documentation
+└── requirements.txt                # Project Requirements
+
 
 ---
 
