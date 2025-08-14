@@ -106,12 +106,12 @@ class ImageRecommender:
         Returns:
             np.ndarray or None: Feature vector or None if computation fails.
         """
-        print(f"🔍 Suche Vektor '{vector_column}' für '{path_rel}' in DB...")
+        print(f"🔍 Searching vector '{vector_column}' for '{path_rel}' in DB...")
         cached = self._get_db_vector(path_rel, vector_table, vector_column)
         if cached is not None:
-            print("✅ Vektor aus Cache geladen.")
+            print("✅ Vector loaded from cache.")
             if print_vectors:
-                print(f"[DB-Vektor]: {cached}")
+                print(f"[DB-Vector]: {cached}")
             return cached
 
         vec = compute_func()
@@ -119,7 +119,7 @@ class ImageRecommender:
             logging.error(f"Failed to compute {vector_column} for '{path_rel}'.")
             return None
         if print_vectors:
-            print(f"[Neu berechneter Vektor]: {vec}")
+            print(f"New computed vector: {vec}")
         if reshape is not None:
             vec = vec.reshape(*reshape)
         return vec
@@ -216,7 +216,7 @@ class ImageRecommender:
         )
 
     # ----------- Main Search Method ----------- #
-    def search_similar_images(self, query_image_path: str, index_type: str = "color"):
+    def search_similar_images(self, query_image_paths: list[str], index_type: str = "color"):
         """
         Runs a similarity search for a query image and displays the top results.
 
@@ -227,23 +227,31 @@ class ImageRecommender:
         Side Effects:
             - Displays a matplotlib plot with top-K matching images and distances.
         """
-        path_rel = str(Path(query_image_path).resolve().relative_to(self.images_root))
+        paths_rel = [
+            str(Path(p).resolve().relative_to(self.images_root)) for p in query_image_paths
+        ]
+        
         ordered = self._get_ordered_index_types(index_type)
         if not ordered:
             return
-        query_vec = self._extract_query_vector(path_rel, ordered)
+
+        query_vec = self._extract_query_vector(paths_rel, ordered)
         if query_vec is None:
             return
+
         canonical = "_".join(ordered)
         index, offset_table = self._load_faiss_index(canonical)
         if index is None:
             return
+
         distances, indices = index.search(query_vec, self.top_k)
         results = self._fetch_results(indices, distances, offset_table)
+        
         if not results:
-            logging.error("Keine ähnlichen Bilder gefunden.")
+            logging.error("No similar images found.")
             return
-        self._plot_results(query_image_path, results)
+            
+        self._plot_results(query_image_paths, results)
 
     def _get_ordered_index_types(self, index_type: str):
         """
@@ -259,12 +267,12 @@ class ImageRecommender:
         valid = ["color", "hog", "lpips", "dreamsim", "sift", "color_sift", "sift_dreamsim"]
         ordered = [v for v in valid if v in requested]
         if not ordered:
-            logging.error(f"Unbekannter index_type '{index_type}'. Wähle aus {valid}.")
+            logging.error(f"Unknown index_type '{index_type}'. Choose from {valid}.")
             return []
-        logging.info(f"🔍 Extrahiere Features in Reihenfolge: {ordered}")
+        logging.info(f"🔍 Extracting features in order: {ordered}")
         return ordered
 
-    def _extract_query_vector(self, path_rel, ordered):
+    def _extract_query_vector(self, paths_rel: list[str], ordered: list[str]):
         """
         Combines individual feature vectors into a query vector.
 
@@ -275,25 +283,45 @@ class ImageRecommender:
         Returns:
             np.ndarray or None: Concatenated query vector.
         """
-        parts = []
-        for vec_type in ordered:
-            if vec_type == "color":
-                parts.append(self.extract_color_features(path_rel))
-            elif vec_type == "sift":
-                parts.append(self.extract_sift_vlad_features(path_rel))
-            elif vec_type == "dreamsim":
-                parts.append(self.extract_dreamsim_features(path_rel))
+        all_query_vectors = []
+        for path_rel in paths_rel:
+            logging.info(f"Extracting vector for query image: '{path_rel}'")
+            parts = []
+            for vec_type in ordered:
+                if vec_type == "color":
+                    parts.append(self.extract_color_features(path_rel))
+                elif vec_type == "sift":
+                    parts.append(self.extract_sift_vlad_features(path_rel))
+                elif vec_type == "dreamsim":
+                    parts.append(self.extract_dreamsim_features(path_rel))
+                else:
+                    logging.error(f"Unknown vector type '{vec_type}' for '{path_rel}'.")
+                    return None
+            
+            if any(p is None for p in parts):
+                logging.error(f"Could not compute all vector features for '{path_rel}', skipping this image.")
+                continue
+
+            if len(parts) == 1:
+                full_vec = parts[0].astype("float32")
             else:
-                logging.error(f"Unbekannter Vektor-Typ '{vec_type}' für '{path_rel}'.")
-                return None
-        if len(parts) == 1:
-            query_vec = parts[0].astype("float32")
-        else:
-            parts = [x.reshape(1, -1) if x.ndim == 1 else x for x in parts]
-            query_vec = np.concatenate(parts, axis=1).astype("float32")
-        if query_vec.ndim == 1:
-            query_vec = query_vec.reshape(1, -1)
-        return query_vec
+                parts = [x.reshape(1, -1) if x.ndim == 1 else x for x in parts]
+                full_vec = np.concatenate(parts, axis=1).astype("float32")
+            
+            all_query_vectors.append(full_vec)
+
+        if not all_query_vectors:
+            logging.error("Could not extract a vector for any of the query images.")
+            return None
+
+        combined_vec = np.mean(all_query_vectors, axis=0)
+
+        faiss.normalize_L2(combined_vec)
+        
+        if combined_vec.ndim == 1:
+            combined_vec = combined_vec.reshape(1, -1)
+
+        return combined_vec
 
     def _load_faiss_index(self, canonical):
         """
@@ -309,10 +337,10 @@ class ImageRecommender:
         offset_table = f"faiss_index_offsets_{canonical}"
         try:
             index = faiss.read_index(index_file)
-            logging.info(f"Geladener FAISS-Index '{index_file}' mit {index.ntotal} Vektoren.")
+            logging.info(f"Loaded FAISS index '{index_file}' with {index.ntotal} vectors.")
             return index, offset_table
         except Exception as e:
-            logging.error(f"Fehler beim Laden des Index '{index_file}': {e}")
+            logging.error(f"Error loading index '{index_file}': {e}")
             return None, None
 
     def _fetch_results(self, indices, distances, offset_table):
@@ -336,13 +364,13 @@ class ImageRecommender:
             )
             row = cur.fetchone()
             if not row:
-                logging.warning(f"Kein Eintrag für offset={offset} in {offset_table}")
+                logging.warning(f"No entry found for offset={offset} in {offset_table}")
                 continue
             img_id = row[0]
             cur.execute("SELECT path FROM images WHERE id = ?", (img_id,))
             fp_row = cur.fetchone()
             if not fp_row:
-                logging.warning(f"Kein Pfad für id={img_id}")
+                logging.warning(f"No path found for id={img_id}")
                 continue
             full_path = Path(self.base_dir) / fp_row[0]
             results.append((full_path, float(distances[0, rank])))
@@ -350,7 +378,7 @@ class ImageRecommender:
         results.sort(key=lambda x: x[1])
         return results
 
-    def _plot_results(self, query_image_path, results):
+    def _plot_results(self, query_image_paths: list[str], results: list):
         """
         Displays a query image alongside the retrieved similar images.
 
@@ -362,35 +390,52 @@ class ImageRecommender:
             - Shows a matplotlib figure with the query and result images.
         """
         sns.set_theme(style="whitegrid")
-        max_per_row = 3
-        total_images = len(results) + 1
-        ncols = max_per_row
+        num_query_images = len(query_image_paths)
+        total_images = num_query_images + len(results)
+        
+        ncols = max(4, num_query_images)
         nrows = int(np.ceil(total_images / ncols))
-        _ , axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
+
+        fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
         axes = axes.flatten()
-        img = load_image(query_image_path)
-        axes[0].imshow(img)
-        axes[0].set_title("Query Image")
-        axes[0].axis("off")
+
+        for i, query_path in enumerate(query_image_paths):
+            try:
+                img = load_image(query_path)
+                axes[i].imshow(img)
+                axes[i].set_title(f"Query: {Path(query_path).name}")
+                axes[i].axis("off")
+            except Exception as e:
+                logging.error(f"Error rendering {query_path}: {e}")
+
         for idx, (fp, dist) in enumerate(results):
-            ax = axes[idx + 1]
+            ax_idx = num_query_images + idx
+            if ax_idx >= len(axes):
+                break 
+            ax = axes[ax_idx]
             try:
                 img = load_image(fp)
                 ax.imshow(img)
                 ax.set_title(f"{Path(fp).name}\nDist: {dist:.4f}")
                 ax.axis("off")
             except Exception as e:
-                logging.error(f"Fehler beim Rendern von {fp}: {e}")
-        for ax in axes[len(results) + 1:]:
-            ax.axis("off")
-        plt.tight_layout()
+                logging.error(f"Error rendering {fp}: {e}")
+
+        for i in range(total_images, len(axes)):
+            axes[i].axis("off")
+
+        plt.tight_layout(pad=2.0, h_pad=3.0)
         plt.show()
 
 if __name__ == "__main__":
     """
     Example usage: Load the recommender and search for images similar to a given file.
     """
-    query_image = (
-        r"image_data/coco2017_train/train2017/000000000034.jpg")
+
+    query_images = [
+        r"image_data/coco2017_train/train2017/000000000034.jpg",
+        r"image_data\coco2017_train\train2017\000000000049.jpg"
+    ]
+
     rec = ImageRecommender()
-    rec.search_similar_images(query_image, index_type="color")
+    rec.search_similar_images(query_images, index_type="color")

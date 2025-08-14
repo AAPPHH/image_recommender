@@ -30,7 +30,7 @@ def main():
 
 
     # 1) Color Histogramm Vektoren berechnen
-    print("=== Starte Color Vector Indexing ===")
+    print("=== Start Color Vector Indexing ===")
     color_indexer = ColorVectorIndexer(
         db_path=db_path,
         base_dir=base_dir,
@@ -41,7 +41,7 @@ def main():
     color_indexer.run()
 
     # 2) SIFTVLAD Vektoren berechnen
-    print("=== Starte SIFTVLAD Vector Indexing ===")
+    print("=== Start SIFTVLAD Vector Indexing ===")
     indexer = SIFTVLADVectorIndexer(
         db_path,
         base_dir,
@@ -51,7 +51,7 @@ def main():
     indexer.run()
 
     # 3) DreamSim Vektoren berechnen
-    print("=== Starte DreamSim Vector Indexing ===")
+    print("=== Start DreamSim Vector Indexing ===")
     dreamsim_indexer = DreamSimVectorIndexer(
         db_path=db_path,
         base_dir=base_dir,
@@ -62,7 +62,7 @@ def main():
     )
     dreamsim_indexer.run()
 
-    print("=== Alle Vektor-Indexierungen abgeschlossen ===")
+    print("=== All vector indexing completed ===")
 
 
 if __name__ == "__main__":
