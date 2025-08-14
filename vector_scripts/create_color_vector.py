@@ -62,7 +62,7 @@ class ColorVectorIndexer(BaseVectorIndexer):
         Returns:
             List[np.ndarray or None]: List of color vectors (or None for failed images).
         """
-        images_dir = self.base_dir / "images_v3"
+        images_dir = self.base_dir
         bins = self.bins
         load_image_kwargs = dict(
             img_size=None,

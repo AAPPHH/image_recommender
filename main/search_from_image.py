@@ -138,7 +138,7 @@ class ImageRecommender:
         def compute():
             indexer = ColorVectorIndexer(
                 db_path="images.db",
-                base_dir=self.base_dir,
+                base_dir=self.images_root,
                 log_file="color_indexer.log",
                 batch_size=16384
             )
@@ -169,7 +169,7 @@ class ImageRecommender:
         def compute():
             indexer = SIFTVLADVectorIndexer(
                 db_path="images.db",
-                base_dir=self.base_dir, 
+                base_dir=self.images_root, 
                 log_file="sift_vlad.log",
                 batch_size=256
             )
@@ -199,7 +199,7 @@ class ImageRecommender:
             if not hasattr(self, "_dreamsim_indexer"):
                 self._dreamsim_indexer = DreamSimVectorIndexer(
                     db_path=str(self.db_path),
-                    base_dir=str(self.base_dir),
+                    base_dir=str(self.images_root),
                     batch_size=4096,
                     model_batch=128,
                     log_file="dreamsim_indexer.log",
@@ -344,7 +344,7 @@ class ImageRecommender:
             if not fp_row:
                 logging.warning(f"Kein Pfad für id={img_id}")
                 continue
-            full_path = Path(self.base_dir) / "images_v3", fp_row[0]
+            full_path = Path(self.base_dir) / fp_row[0]
             results.append((full_path, float(distances[0, rank])))
         conn.close()
         results.sort(key=lambda x: x[1])

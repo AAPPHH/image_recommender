@@ -6,7 +6,9 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # macOS/Accelerate
 os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import random
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import cv2
 import faiss
@@ -42,7 +44,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.images_dir = self.base_dir / "images_v3"
+        self.images_dir = self.base_dir
         self.codebook = self.load_or_create_codebook(self.images_dir, n_clusters=self.n_clusters, sample_limit=self.n_clusters * 20_000)
         self.index_path = "hnsw.idx"
         self.faiss_index = self.build_or_load_index(self.index_path)
@@ -438,7 +440,13 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             return (idx, None)
 
         img8 = (img * 255).astype(np.uint8) if img.dtype == np.float32 else img
-        _, descriptors = cls._worker_sift.detectAndCompute(img8, None)
+
+        try:
+            _, descriptors = cls._worker_sift.detectAndCompute(img8, None)
+        except cv2.error as e:
+            print(f"⚠️ OpenCV error processing {img_path}: {e}")
+            return (idx, None)
+        
         n_clusters, descriptor_dim = cls._worker_codebook.shape
 
         if descriptors is None or len(descriptors) == 0:

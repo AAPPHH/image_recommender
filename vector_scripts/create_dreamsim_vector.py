@@ -9,8 +9,8 @@ except ImportError:
     from vector_scripts.create_vector_base import BaseVectorIndexer, load_image
 
 class DreamSimVectorIndexer(BaseVectorIndexer):
-    table_name = "dreamsim_vectors"             # NEU: Deine Tabelle!
-    vector_column = "dreamsim_vector_blob"      # Name des BLOB-Feldes
+    table_name = "dreamsim_vectors"
+    vector_column = "dreamsim_vector_blob"
     id_column = "image_id" 
 
     def __init__(
@@ -63,7 +63,7 @@ class DreamSimVectorIndexer(BaseVectorIndexer):
         images = []
         valid_paths = []
         for rel_path in image_paths:
-            full_path = self.base_dir / "images_v3" / rel_path
+            full_path = self.base_dir / rel_path
             img = load_image(full_path, img_size=(224, 224), gray=False, normalize=True, antialias=True)
             if img is None:
                 self._log_and_print(f"⚠️ Error loading {full_path}", level="warning")

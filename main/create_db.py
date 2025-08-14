@@ -96,7 +96,7 @@ class ImageDBCreator:
         """
         exts = (".jpg", ".jpeg", ".png")
         base = Path(self.base_folder)
-        all_imgs = [p.relative_to(base).as_posix() for ext in exts for p in base.rglob(f"*{ext}")]
+        all_imgs = [p.relative_to(base.parent).as_posix() for ext in exts for p in base.rglob(f"*{ext}")]
         batch = []
         for rel_path in all_imgs:
             batch.append(rel_path)  # already POSIX
@@ -133,13 +133,13 @@ class ImageDBCreator:
 
 if __name__ == "__main__":
     """
-    CLI entry point: Initializes the ImageDBCreator with default paths and runs the batch processing.
+    Initializes the ImageDBCreator with default paths and runs the batch processing.
 
-    - Base folder: 'images_v3'
+    - Base folder: 'image_data'
     - Database path: 'images.db'
     - Batch size: 10_000
     """
-    BASE_FOLDER = "images_v3"
+    BASE_FOLDER = "image_data"
     DB_PATH = "images.db"
 
     creator = ImageDBCreator(
