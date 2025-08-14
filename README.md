@@ -51,9 +51,7 @@ Store image paths and embeddings in SQLite, build a FAISS HNSW index for fast ne
 │
 ├── README.md                       # Project documentation
 └── requirements.txt                # Project Requirements
-
-
----
+```
 
 ## 🛠️ Installation & Dependencies
 
