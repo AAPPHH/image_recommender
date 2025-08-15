@@ -46,7 +46,7 @@ def main():
         db_path,
         base_dir,
         log_file="sift_vlad_indexer.log",
-        batch_size=4096,
+        batch_size=4096, 
     )
     indexer.run()
 

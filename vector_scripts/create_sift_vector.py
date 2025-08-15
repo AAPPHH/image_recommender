@@ -50,11 +50,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         self.faiss_index = self.build_or_load_index(self.index_path)
 
         try:
-            self._log_and_print("Kein Encoder gefunden, starte automatisches Autoencoder-Training...", level="info")
+            self._log_and_print("No Encoder found, starting automatic Autoencoder training...", level="info")
             self.load_train_encoder_on_sample(epochs=400, batch_size=self.batch_size, latent_dim=self.encoder_dim)
         except Exception as e:
-            self._log_and_print(f"Autoencoder-Training fehlgeschlagen: {e}", level="warning")
-            self.encoder_model = None 
+            self._log_and_print(f"Autoencoder training failed: {e}", level="warning")
+            self.encoder_model = None
 
     class SIFTVLADEncoder(nn.Module):
         def __init__(self, input_dim=32768, latent_dim=128, dropout_rate=0.1):
@@ -214,10 +214,10 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
                 break
 
         if not all_descs:
-            raise RuntimeError("Keine Deskriptoren gefunden!")
+            raise RuntimeError("No descriptors found!")
 
         train_descs = np.vstack(all_descs)[:sample_limit]
-        print("Starte FAISS KMeans mit", train_descs.shape[0], "Deskriptoren...")
+        print("Starting FAISS KMeans with", train_descs.shape[0], "descriptors...")
         kmeans = faiss.Kmeans(
             train_descs.shape[1], n_clusters,
             niter=25, verbose=True,
@@ -283,11 +283,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             index.hnsw.efSearch = efSearch
             index.add(self.codebook.astype(np.float32))
             faiss.write_index(index, index_path)
-            print(f"✅ HNSW-Index gespeichert als {index_path}")
+            print(f"✅ HNSW-Index saved as {index_path}")
         else:
-            print(f"HNSW-Index existiert schon ({index_path}), lade Index ...")
+            print(f"HNSW-Index already exists ({index_path}), loading index...")
             index = faiss.read_index(index_path)
-            print("✅ Index geladen.")
+            print("✅ Index loaded.")
         return index
 
     @classmethod
@@ -305,7 +305,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
 
         index_path = "hnsw.idx"
         if not Path(index_path).exists():
-            raise RuntimeError(f"Index-Datei {index_path} nicht gefunden! Bitte vorher bauen.")
+            raise RuntimeError(f"Index file {index_path} not found! Please build it first.")
         cls._worker_index = faiss.read_index(index_path)
         cls._worker_sift = cv2.SIFT_create(nfeatures=1000)
 
@@ -412,8 +412,6 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
         self.encoder_model = model
         self._log_and_print("Encoder-Training abgeschlossen (Mish, LayerNorm, PyTorch) und Encoder gespeichert.", level="info")
         return model
-
-
 
     @classmethod
     def _compute_sift_vlad_worker(cls, args):
@@ -572,11 +570,11 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
                             break
                 if n_done >= n_samples:
                     break
-                print(f"{n_done} Vektoren gespeichert ...")
-        print(f"✅ {n_done} Vektoren in {out_path} gespeichert (HDF5)")
+                print(f"{n_done} vectors saved ...")
+        print(f"✅ {n_done} vectors saved to {out_path} (HDF5)")
 
 if __name__ == "__main__":
-    print("FAISS-GPU verfügbar!" if hasattr(faiss, "StandardGpuResources") else "Nur FAISS-CPU installiert.")
+    print("FAISS-GPU available!" if hasattr(faiss, "StandardGpuResources") else "Only FAISS-CPU installed.")
     db_path = "images.db"
     base_dir = Path().cwd()
     indexer = SIFTVLADVectorIndexer(
