@@ -9,13 +9,11 @@ import h5py
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import pearsonr
 import optuna
-from pathlib import Path
 
 BATCH_SIZE = 4096
-n_load = 100_000   # Anzahl Samples aus HDF5
-n_test = 500     # Größe Testmenge
+n_load = 100_000
+n_test = 500 
 
-# ---- HDF5 Dataset-Wrapper für PyTorch ----
 class HDF5VectorDataset(Dataset):
     def __init__(self, h5_path, indices):
         self.h5_path = h5_path
@@ -32,7 +30,6 @@ class HDF5VectorDataset(Dataset):
             vec = f["vectors"][i][:]
         return vec.astype(np.float32)
 
-# ---- Zufällige Test-/Train-Splits ----
 with h5py.File("vlad_vectors.hdf5", "r") as f:
     N = min(n_load, f["vectors"].shape[0])
     input_dim = f["vectors"].shape[1]
@@ -42,7 +39,6 @@ idx_all = list(range(N))
 test_idx = random.sample(idx_all, n_test)
 train_idx = list(set(idx_all) - set(test_idx))
 
-# ---- Scipy-pdist Helper für große Matrizen ----
 def get_latents(model, dataloader, device):
     """
     Encodes all batches in a DataLoader using the given model.
@@ -64,7 +60,6 @@ def get_latents(model, dataloader, device):
             latents.append(z.cpu().numpy())
     return np.vstack(latents)
 
-# ---- Modell mit variabler Architektur ----
 class Encoder(nn.Module):
     def __init__(self, input_dim, hidden_layers, latent_dim, dropout):
         super().__init__()
@@ -148,8 +143,8 @@ def objective(trial):
 
     latent_dim = 128
     n_layers = trial.suggest_int("n_layers", 1, 3)
-    start_size = trial.suggest_int("start_size", 256, 4096, step=64)  # Startgröße des ersten Hidden-Layers
-    shrink_ratio = trial.suggest_float("shrink_ratio", 0.4, 0.9)      # Wie stark schrumpfen die Layer?
+    start_size = trial.suggest_int("start_size", 256, 4096, step=64)
+    shrink_ratio = trial.suggest_float("shrink_ratio", 0.4, 0.9)
 
     dropout = 0.1
     lambda_corr = 2
@@ -159,7 +154,6 @@ def objective(trial):
     batch_size = 4096
     epochs = 20
 
-    # Trichterförmig schrumpfende Layer erzeugen:
     hidden_layers = []
     prev_dim = start_size
     for i in range(n_layers):
@@ -244,8 +238,8 @@ if __name__ == "__main__":
     - Stores results in a persistent Optuna SQLite database.
     - Prints best trial parameters and architecture.
     """
-    study_name = "my_vlad_search"  # Name frei wählbar!
-    storage = "sqlite:///optuna_vlad_search.db"  # Relativer Pfad zur DB
+    study_name = "my_vlad_search"
+    storage = "sqlite:///optuna_vlad_search.db"
 
     pruner = optuna.pruners.HyperbandPruner(
     min_resource=3,
@@ -264,4 +258,3 @@ if __name__ == "__main__":
 
     print("🏆 Beste Konfiguration:", study.best_params)
     print("Bestes Hidden-Layer-Setup:", study.best_trial.user_attrs["hidden_layers"])
-

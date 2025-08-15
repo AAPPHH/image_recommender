@@ -45,7 +45,6 @@ Store image paths and embeddings in SQLite, build a FAISS HNSW index for fast ne
 │   └── test_vector_indexers.py     # Unit tests for indexing and retrieval pipelines
 │
 ├── autoencoder/
-│   ├── autoencoder_grid_search.py  # Grid search for compression model tuning
 │   ├── encoder_optu_tuner.py       # Optuna tuner for autoencoder hyperparameters
 │   └── encoder_test.py             # Test autoencoder-based compression performance
 │
