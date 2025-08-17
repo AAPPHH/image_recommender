@@ -25,7 +25,6 @@ TABLE_NAME = "dreamsim_vectors"
 VECTOR_COLUMN = "dreamsim_vector_blob"
 CACHE_DIR = Path("cache")
 
-# Data and Processing Parameters
 LIMIT = 15_000
 UMAP_PARAMS = {
     "n_neighbors": 15,
@@ -158,9 +157,6 @@ def cache_data(filename, func, *args, **kwargs):
         pickle.dump(result, f)
     return result
 
-
-# --- Data Processing Wrappers ---
-
 def reduce_with_umap(features, **kwargs):
     """Performs UMAP dimensionality reduction.
 
@@ -284,7 +280,6 @@ def show_image_and_stats_on_hover(hoverData):
     except ValueError:
         return html.P("Image not found in data."), None
 
-    # Retrieve data using the found index from module-level variables
     original_vector = dream_vectors[idx]
     coords = umap_embeddings[idx]
     cluster_id = cluster_labels[idx]
@@ -492,7 +487,7 @@ def main():
     
     start_file_server()
     webbrowser.open(f"http://127.0.0.1:{DASH_PORT}")
-    app.run_server(port=DASH_PORT, debug=False)
+    app.run(port=DASH_PORT, debug=False)
 
 if __name__ == "__main__":
     main()
