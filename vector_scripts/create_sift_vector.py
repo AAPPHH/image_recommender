@@ -54,7 +54,7 @@ class SIFTVLADVectorIndexer(BaseVectorIndexer):
             self.load_train_encoder_on_sample(epochs=400, batch_size=self.batch_size, latent_dim=self.encoder_dim)
         except Exception as e:
             self._log_and_print(f"Autoencoder training failed: {e}", level="warning")
-            self.encoder_model = None
+            raise RuntimeError("Encoder training failed. Cannot proceed without a valid encoder.") from e
 
     class SIFTVLADEncoder(nn.Module):
         def __init__(self, input_dim=32768, latent_dim=128, dropout_rate=0.1):
