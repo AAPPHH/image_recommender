@@ -316,11 +316,11 @@ class ImageRecommender:
 
         combined_vec = np.mean(all_query_vectors, axis=0)
 
-        faiss.normalize_L2(combined_vec)
-        
         if combined_vec.ndim == 1:
             combined_vec = combined_vec.reshape(1, -1)
 
+        faiss.normalize_L2(combined_vec)
+        
         return combined_vec
 
     def _load_faiss_index(self, canonical):
@@ -438,4 +438,4 @@ if __name__ == "__main__":
     ]
 
     rec = ImageRecommender()
-    rec.search_similar_images(query_images, index_type="color")
+    rec.search_similar_images(query_images, index_type="sift")
